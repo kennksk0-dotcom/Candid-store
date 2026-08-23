@@ -2,7 +2,7 @@ import telebot
 import requests
 
 # --- CONFIGURATION ---
-BOT_TOKEN = "PASTE_YOUR_BOTFATHER_TOKEN_HERE"
+BOT_TOKEN = "8980753842:AAG05SklWh3TshUWiJio1_MTWo2Net-ijiE"
 ADMIN_ID = 7997110885
 
 # XYZ Cheats Reseller API Details
