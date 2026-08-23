@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
-BOT_TOKEN = "YOUR_ACTUAL_BOTFATHER_TOKEN"
+BOT_TOKEN = "8980753842:AAG05SklWh3TshUWiJio1_MTWo2Net-ijiE"
 ADMIN_ID = 7997110885
 
 # 1. FamAPI / FreePanel Configuration
