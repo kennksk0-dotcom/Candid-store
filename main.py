@@ -142,7 +142,7 @@ def send_welcome(message):
         except Exception:
             pass
 
-    if not user or not user["verified"]:
+    if not user or not user.get("verified", False):
         if not user:
             save_user({
                 "user_id": user_id, "name": message.from_user.first_name, "phone": None,
@@ -193,7 +193,7 @@ def show_main_menu(chat_id, user_id):
     )
     
     markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("🎮 Buy Bala Mod Config", callback_data="buy_balamod"))
+    markup.add(telebot.types.InlineKeyboardButton("📦 All Products", callback_data="all_products"))
     markup.add(telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
                telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders"))
     markup.add(telebot.types.InlineKeyboardButton("🎁 Referral", callback_data="referral"),
@@ -218,7 +218,18 @@ def handle_callback(call):
     if user_id in admin_actions:
         del admin_actions[user_id]
 
-    if call.data == "buy_balamod":
+    if call.data == "all_products":
+        bot.answer_callback_query(call.id)
+        catalog_text = (
+            "🛍️ — **STORE CATALOG** — 🛍️\n\n"
+            "Select a product below to view plans and pricing:"
+        )
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("🎮 Bala Mod Non-Root", callback_data="buy_balamod"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+        bot.send_message(call.message.chat.id, catalog_text, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "buy_balamod":
         bot.answer_callback_query(call.id)
         is_reseller = (user_role == "Reseller" or is_admin)
         
@@ -241,7 +252,7 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"6 Hours — ₹{p6}", callback_data="dur_6h"))
         markup.add(telebot.types.InlineKeyboardButton(f"12 Hours — ₹{p12}", callback_data="dur_12h"))
         markup.add(telebot.types.InlineKeyboardButton(f"24 Hours — ₹{p24}", callback_data="dur_24h"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Shop", callback_data="main_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
         
         bot.send_message(call.message.chat.id, card_text, parse_mode="Markdown", reply_markup=markup)
         
@@ -297,7 +308,7 @@ def handle_callback(call):
                 parse_mode="Markdown",
                 reply_markup=telebot.types.InlineKeyboardMarkup().add(
                     telebot.types.InlineKeyboardButton("💳 Add Balance Now", callback_data="add_balance"),
-                    telebot.types.InlineKeyboardButton("🔙 Back to Shop", callback_data="main_menu")
+                    telebot.types.InlineKeyboardButton("🔙 Back to Shop", callback_data="all_products")
                 )
             )
 
@@ -434,19 +445,24 @@ def create_topup_order(message_obj, user_id, amount_inr):
         if "payment_link" in res_data:
             order_id = res_data["id"]
             pay_link = res_data["payment_link"]
-            qr_url = res_data.get("qr_url", "")
+            
+            # Generate QR code image dynamically from payment link
+            qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={requests.utils.quote(pay_link)}"
             
             user_orders[user_id] = {"order_id": order_id, "amount": amount_inr}
             
             markup = telebot.types.InlineKeyboardMarkup()
-            markup.add(telebot.types.InlineKeyboardButton("🔗 Pay Now via UPI", url=pay_link))
             markup.add(telebot.types.InlineKeyboardButton("✅ I Have Paid", callback_data="check_topup"))
             markup.add(telebot.types.InlineKeyboardButton("❌ Cancel Order", callback_data="cancel_topup"))
             
-            if qr_url:
-                bot.send_photo(chat_id, qr_url, caption=f"💳 **Top-Up Order:** ₹{amount_inr}\nID: `{order_id}`\n\nScan the QR code or click **Pay Now**.", parse_mode="Markdown", reply_markup=markup)
-            else:
-                bot.send_message(chat_id, f"💳 **Top-Up Order:** ₹{amount_inr}\nID: `{order_id}`\n\nClick **Pay Now** to complete payment.", parse_mode="Markdown", reply_markup=markup)
+            caption_text = (
+                f"💳 **Top-Up Order:** ₹{amount_inr}\n"
+                f"🆔 ID: `{order_id}`\n\n"
+                f"🔗 **Payment Link:**\n`{pay_link}`\n\n"
+                f"Scan the QR code above or copy the payment link into your UPI app, then click **I Have Paid**."
+            )
+            
+            bot.send_photo(chat_id, qr_image_url, caption=caption_text, parse_mode="Markdown", reply_markup=markup)
         else:
             bot.send_message(chat_id, f"❌ FamAPI Error Response: {res_data}")
     except Exception as e:
@@ -511,5 +527,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Fully Operational Production Bot is running...")
+print("Fully Loaded Bot with QR Image Generation is running...")
 bot.infinity_polling()
