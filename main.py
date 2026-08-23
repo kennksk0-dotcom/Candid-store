@@ -213,10 +213,12 @@ def handle_callback(call):
     is_admin = (user_id == ADMIN_ID)
     user_role = user.get("role", "Customer") if user else "Customer"
     
-    if user_id in waiting_for_custom_topup:
-        del waiting_for_custom_topup[user_id]
-    if user_id in admin_actions:
-        del admin_actions[user_id]
+    # Reset input states safely when navigating via buttons
+    if call.data in ["all_products", "add_balance", "profile", "orders", "referral", "main_menu", "admin_panel"]:
+        if user_id in waiting_for_custom_topup:
+            del waiting_for_custom_topup[user_id]
+        if user_id in admin_actions:
+            del admin_actions[user_id]
 
     if call.data == "all_products":
         bot.answer_callback_query(call.id)
@@ -291,11 +293,7 @@ def handle_callback(call):
                 api_res = requests.post(XYZ_API_URL, data=payload, headers=headers)
                 raw_response = api_res.text.strip()
                 
-                print(f"XYZ API Status Code: {api_res.status_code}")
-                print(f"XYZ API Raw Response: {raw_response}")
-                
                 license_key = None
-                
                 try:
                     res_json = api_res.json()
                     license_key = res_json.get("key") or res_json.get("license") or res_json.get("message") or res_json.get("data")
@@ -325,11 +323,7 @@ def handle_callback(call):
                     user["orders_count"] -= 1
                     user["total_spent"] -= price_inr
                     save_user(user)
-                    bot.send_message(
-                        call.message.chat.id, 
-                        f"❌ **API Error / Refunded**\nServer said: `{raw_response[:300]}`", 
-                        parse_mode="Markdown"
-                    )
+                    bot.send_message(call.message.chat.id, f"❌ **API Error / Refunded**\nServer said: `{raw_response[:300]}`", parse_mode="Markdown")
             except Exception as e:
                 user["balance"] += price_inr
                 user["orders_count"] -= 1
@@ -560,5 +554,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Fully Patched Stock-Matched Production Bot is running...")
+print("Fully Corrected and Polished Production Bot is running...")
 bot.infinity_polling()
