@@ -276,19 +276,35 @@ def handle_callback(call):
             user["total_spent"] += price_inr
             save_user(user)
             
-            payload = {'api_key': XYZ_API_KEY, 'action': 'buy', 'product_id': '142', 'duration': duration_text}
-            headers = {'Content-Type': 'application/x-www-form-urlencoded', 'x-master-key': XYZ_MASTER_KEY}
+            # Corrected XYZ Reseller API Payload structure
+            payload = {
+                'api_key': XYZ_API_KEY,
+                'action': 'buy',
+                'product_id': '142',
+                'duration': duration_text
+            }
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'x-master-key': XYZ_MASTER_KEY
+            }
             
             try:
                 api_res = requests.post(XYZ_API_URL, data=payload, headers=headers)
                 res_json = api_res.json()
-                if "key" in res_json or res_json.get("status") == "success":
-                    license_key = res_json.get("key", res_json.get("message", "XYZ-KEY"))
+                
+                # Check different response formats from reseller APIs
+                license_key = res_json.get("key") or res_json.get("license") or res_json.get("message")
+                
+                if res_json.get("status") == "success" or license_key:
                     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
+                    # Save into SQLite orders table securely
                     conn = sqlite3.connect('database.db', check_same_thread=False)
-                    conn.cursor().execute('INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (?, ?, ?, ?, ?)',
-                                          (user_id, duration_text, license_key, price_inr, current_time))
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (?, ?, ?, ?, ?)',
+                        (user_id, duration_text, str(license_key), price_inr, current_time)
+                    )
                     conn.commit()
                     conn.close()
                     
@@ -298,9 +314,16 @@ def handle_callback(call):
                         parse_mode="Markdown"
                     )
                 else:
-                    bot.send_message(call.message.chat.id, f"❌ Key generation failed: {res_json.get('message', 'Error')}")
+                    # Refund user if API purchase failed
+                    user["balance"] += price_inr
+                    user["orders_count"] -= 1
+                    user["total_spent"] -= price_inr
+                    save_user(user)
+                    bot.send_message(call.message.chat.id, f"❌ Key generation failed from provider. Balance refunded.\nResponse: {res_json}")
             except Exception as e:
-                bot.send_message(call.message.chat.id, f"⚠️ API Error: {str(e)}")
+                user["balance"] += price_inr
+                save_user(user)
+                bot.send_message(call.message.chat.id, f"⚠️ API Error, balance refunded: {str(e)}")
         else:
             bot.send_message(
                 call.message.chat.id,
@@ -445,8 +468,6 @@ def create_topup_order(message_obj, user_id, amount_inr):
         if "payment_link" in res_data:
             order_id = res_data["id"]
             pay_link = res_data["payment_link"]
-            
-            # Generate QR code image dynamically from payment link
             qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={requests.utils.quote(pay_link)}"
             
             user_orders[user_id] = {"order_id": order_id, "amount": amount_inr}
@@ -525,7 +546,7 @@ def admin_input(message):
             else:
                 bot.send_message(message.chat.id, "❌ User not found.")
         except Exception:
-            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
+            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_M="Markdown")
 
-print("Fully Loaded Bot with QR Image Generation is running...")
+print("Fully Patched Orders & Reseller API Bot is running...")
 bot.infinity_polling()
