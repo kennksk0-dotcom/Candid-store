@@ -247,7 +247,7 @@ def handle_callback(call):
         )
         
         markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton(f"1 Hour — ₹{p1}", callback_data="dur_1h"))
+        markup.add(telebot.types.InlineKeyboardButton(f"1 Hours — ₹{p1}", callback_data="dur_1h"))
         markup.add(telebot.types.InlineKeyboardButton(f"3 Hours — ₹{p3}", callback_data="dur_3h"))
         markup.add(telebot.types.InlineKeyboardButton(f"6 Hours — ₹{p6}", callback_data="dur_6h"))
         markup.add(telebot.types.InlineKeyboardButton(f"12 Hours — ₹{p12}", callback_data="dur_12h"))
@@ -276,7 +276,6 @@ def handle_callback(call):
             user["total_spent"] += price_inr
             save_user(user)
             
-            # Corrected XYZ Reseller API Payload structure
             payload = {
                 'api_key': XYZ_API_KEY,
                 'action': 'buy',
@@ -290,15 +289,23 @@ def handle_callback(call):
             
             try:
                 api_res = requests.post(XYZ_API_URL, data=payload, headers=headers)
-                res_json = api_res.json()
+                raw_response = api_res.text.strip()
                 
-                # Check different response formats from reseller APIs
-                license_key = res_json.get("key") or res_json.get("license") or res_json.get("message")
+                print(f"XYZ API Status Code: {api_res.status_code}")
+                print(f"XYZ API Raw Response: {raw_response}")
                 
-                if res_json.get("status") == "success" or license_key:
+                license_key = None
+                
+                try:
+                    res_json = api_res.json()
+                    license_key = res_json.get("key") or res_json.get("license") or res_json.get("message") or res_json.get("data")
+                except Exception:
+                    if raw_response and "error" not in raw_response.lower() and "html" not in raw_response.lower():
+                        license_key = raw_response
+
+                if license_key and "error" not in str(license_key).lower():
                     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
-                    # Save into SQLite orders table securely
                     conn = sqlite3.connect('database.db', check_same_thread=False)
                     cursor = conn.cursor()
                     cursor.execute(
@@ -314,16 +321,21 @@ def handle_callback(call):
                         parse_mode="Markdown"
                     )
                 else:
-                    # Refund user if API purchase failed
                     user["balance"] += price_inr
                     user["orders_count"] -= 1
                     user["total_spent"] -= price_inr
                     save_user(user)
-                    bot.send_message(call.message.chat.id, f"❌ Key generation failed from provider. Balance refunded.\nResponse: {res_json}")
+                    bot.send_message(
+                        call.message.chat.id, 
+                        f"❌ **API Error / Refunded**\nServer said: `{raw_response[:300]}`", 
+                        parse_mode="Markdown"
+                    )
             except Exception as e:
                 user["balance"] += price_inr
+                user["orders_count"] -= 1
+                user["total_spent"] -= price_inr
                 save_user(user)
-                bot.send_message(call.message.chat.id, f"⚠️ API Error, balance refunded: {str(e)}")
+                bot.send_message(call.message.chat.id, f"⚠️ Connection Exception, balance refunded: {str(e)}")
         else:
             bot.send_message(
                 call.message.chat.id,
@@ -546,7 +558,7 @@ def admin_input(message):
             else:
                 bot.send_message(message.chat.id, "❌ User not found.")
         except Exception:
-            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_M="Markdown")
+            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Fully Patched Orders & Reseller API Bot is running...")
+print("Fully Patched Stock-Matched Production Bot is running...")
 bot.infinity_polling()
