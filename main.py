@@ -11,8 +11,8 @@ ADMIN_ID = 7997110885
 FAMPAY_API_KEY = "FAM_LIVE_sk_hRGdY9XAmPu7wzRg9HXjwa8pHdPhKNGB"
 FAMPAY_BASE_URL = "https://py.freepanel.in/api/v1"
 
-# 2. XYZ Cheats Reseller API Configuration
-XYZ_API_URL = "https://xyzcheats.com/api/reseller_v1.php"
+# 2. Updated Reseller Panel API Configuration
+XYZ_API_URL = "https://adminpanels.shop/api/reseller_v1.php"
 XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
@@ -451,7 +451,7 @@ def handle_callback(call):
 def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, product_name):
     balance = user["balance"]
     if balance >= price_inr:
-        proc_msg = bot.send_message(call.message.chat.id, f"⏳ Contacting XYZ Reseller Server for {product_name}...")
+        proc_msg = bot.send_message(call.message.chat.id, f"⏳ Contacting Reseller Server for {product_name}...")
         
         user["balance"] -= price_inr
         user["orders_count"] += 1
@@ -605,7 +605,7 @@ def admin_input(message):
                 target["banned"] = not target["banned"]
                 save_user(target)
                 status = "Banned" if target["banned"] else "Unbanned"
-                bot.send_message(message.chat.id, f"✅ User `{target_id}` status: **{status}**", parse_Mode="Markdown")
+                bot.send_message(message.chat.id, f"✅ User `{target_id}` status: **{status}**", parse_mode="Markdown")
             else:
                 bot.send_message(message.chat.id, "❌ User not found.")
         except Exception:
@@ -624,5 +624,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Candid Store Bot (Config & V2) is running...")
+print("Candid Store Bot with adminpanels.shop API is running...")
 bot.infinity_polling()
