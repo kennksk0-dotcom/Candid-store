@@ -123,7 +123,7 @@ def send_welcome(message):
     user_id = message.from_user.id
     
     if check_timeout(user_id) > 0:
-        bot.send_message(message.chat.id, "⏳ You are temporarily timed out for canceling payment QR codes too many times.", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "⏳ You are temporarily timed out for canceling payment orders too many times.", parse_mode="Markdown")
         return
 
     user = get_user(user_id)
@@ -213,6 +213,11 @@ def handle_callback(call):
     is_admin = (user_id == ADMIN_ID)
     user_role = user.get("role", "Customer") if user else "Customer"
     
+    if user_id in waiting_for_custom_topup:
+        del waiting_for_custom_topup[user_id]
+    if user_id in admin_actions:
+        del admin_actions[user_id]
+
     if call.data == "buy_balamod":
         bot.answer_callback_query(call.id)
         is_reseller = (user_role == "Reseller" or is_admin)
@@ -302,7 +307,7 @@ def handle_callback(call):
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
         )
-        bot.send_message(call.chat.id, "💳 **Add Balance**\n\nPlease reply with the amount in Rupees you want to add (e.g. `100`):", parse_mode="Markdown", reply_markup=markup)
+        bot.send_message(call.message.chat.id, "💳 **Add Balance**\n\nPlease reply with the amount in Rupees you want to add (e.g. `100`):", parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "cancel_topup":
         bot.answer_callback_query(call.id, text="Order cancelled.")
@@ -394,7 +399,7 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🔨 Ban / Unban User", callback_data="adm_ban_menu"))
         markup.add(telebot.types.InlineKeyboardButton("💰 Add Balance to User", callback_data="adm_addbal_menu"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.send_message(call.chat.id, "👑 **MASTER ADMIN PANEL**", reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "👑 **MASTER ADMIN PANEL**", reply_markup=markup, parse_mode="Markdown")
 
     elif call.data == "adm_users_list" and is_admin:
         bot.answer_callback_query(call.id)
@@ -407,18 +412,20 @@ def handle_callback(call):
         text = "📋 — **BOT USERS** — 📋\n\n"
         for r in rows:
             text += f"🆔 `{r[0]}` | {r[1]} | 📱 {r[2]} | Role: {r[3]} | 📅 {r[4]}\n\n"
-        bot.send_message(call.chat.id, text[:4000], parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, text[:4000], parse_mode="Markdown")
 
     elif call.data in ["adm_toggle_reseller", "adm_ban_menu", "adm_addbal_menu"] and is_admin:
         bot.answer_callback_query(call.id)
         actions = {"adm_toggle_reseller": "reseller", "adm_ban_menu": "ban", "adm_addbal_menu": "addbal"}
         admin_actions[user_id] = actions[call.data]
-        bot.send_message(call.chat.id, "💬 Send the target User ID (and Amount if adding balance):")
+        bot.send_message(call.message.chat.id, "💬 Send the target User ID (and Amount if adding balance):")
 
 def create_topup_order(message_obj, user_id, amount_inr):
     amount_paise = amount_inr * 100
     headers = {"Authorization": f"Bearer {FAMPAY_API_KEY}", "Content-Type": "application/json"}
     payload = {"amount": amount_paise, "redirect_url": "https://t.me/"}
+    
+    chat_id = message_obj.chat.id if hasattr(message_obj, 'chat') else message_obj
     
     try:
         response = requests.post(f"{FAMPAY_BASE_URL}/orders", json=payload, headers=headers)
@@ -436,17 +443,13 @@ def create_topup_order(message_obj, user_id, amount_inr):
             markup.add(telebot.types.InlineKeyboardButton("✅ I Have Paid", callback_data="check_topup"))
             markup.add(telebot.types.InlineKeyboardButton("❌ Cancel Order", callback_data="cancel_topup"))
             
-            chat_id = message_obj.chat.id if hasattr(message_obj, 'chat') else message_obj
-            
             if qr_url:
                 bot.send_photo(chat_id, qr_url, caption=f"💳 **Top-Up Order:** ₹{amount_inr}\nID: `{order_id}`\n\nScan the QR code or click **Pay Now**.", parse_mode="Markdown", reply_markup=markup)
             else:
                 bot.send_message(chat_id, f"💳 **Top-Up Order:** ₹{amount_inr}\nID: `{order_id}`\n\nClick **Pay Now** to complete payment.", parse_mode="Markdown", reply_markup=markup)
         else:
-            chat_id = message_obj.chat.id if hasattr(message_obj, 'chat') else message_obj
-            bot.send_message(chat_id, "❌ Error generating payment order.")
+            bot.send_message(chat_id, f"❌ FamAPI Error Response: {res_data}")
     except Exception as e:
-        chat_id = message_obj.chat.id if hasattr(message_obj, 'chat') else message_obj
         bot.send_message(chat_id, f"⚠️ Gateway Error: {str(e)}")
 
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_custom_topup)
@@ -508,5 +511,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Production Ready Store Bot is running...")
+print("Fully Operational Production Bot is running...")
 bot.infinity_polling()
