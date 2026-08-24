@@ -20,9 +20,13 @@ XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
+# --- MAINTENANCE TOGGLE ---
+STORE_UNDER_MAINTENANCE = False  # Set to True to enable maintenance mode across the store
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 user_cache = {}
+last_purchase_time = {}  # Enhanced anti-hack security tracking
 
 def get_db_connection():
     return psycopg2.connect(SUPABASE_DB_URL, sslmode='require', connect_timeout=5)
@@ -299,6 +303,16 @@ def handle_callback(call):
     user_role = user.get("role", "Customer") if user else "Customer"
     is_res = (user_role == "Reseller" or is_admin)
     
+    maintenance_bypass_actions = ["admin_panel", "adm_users_list", "adm_all_transactions", "adm_check_user", "adm_addbal_menu", "adm_cutbal_menu", "adm_broadcast", "adm_toggle_reseller", "adm_ban_menu", "profile", "orders", "referral", "main_menu"]
+    if STORE_UNDER_MAINTENANCE and not is_admin and call.data not in maintenance_bypass_actions:
+        bot.answer_callback_query(call.id, text="Store is under maintenance!", show_alert=True)
+        bot.send_message(
+            call.message.chat.id, 
+            "🛠️ **STORE UNDER MAINTENANCE** 🛠️\n\nOur store is currently undergoing scheduled maintenance and updates. Please check back shortly!", 
+            parse_mode="Markdown"
+        )
+        return
+
     if call.data in ["all_products", "add_balance", "profile", "orders", "referral", "main_menu", "admin_panel"]:
         if user_id in waiting_for_custom_topup:
             del waiting_for_custom_topup[user_id]
@@ -867,6 +881,32 @@ def handle_callback(call):
             bot.send_message(call.message.chat.id, "💬 Send the target User ID:")
 
 def execute_purchase(call, user_id, product_id, duration_text, price_inr, product_name):
+    # --- HARDENED ANTI-HACK RAPID PURCHASE GUARD (30 SECONDS COOLDOWN) ---
+    current_time_epoch = time.time()
+    if user_id in last_purchase_time:
+        time_difference = current_time_epoch - last_purchase_time[user_id]
+        if time_difference < 30:
+            admin_username = ""
+            try:
+                admin_chat = bot.get_chat(ADMIN_ID)
+                admin_username = admin_chat.username if admin_chat.username else ""
+            except Exception:
+                pass
+            
+            markup = telebot.types.InlineKeyboardMarkup()
+            if admin_username:
+                markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
+            
+            bot.send_message(
+                call.message.chat.id,
+                "⚠️ **SECURITY ALERT (ANTI-HACK SYSTEM)** ⚠️\n\n"
+                "Suspicious rapid purchasing behavior detected. Multiple consecutive orders are temporarily locked.\n\n"
+                "💬 Please **Contact Admin** for support.",
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+            return
+
     # Fetch live database user record
     fresh_user = get_user(user_id)
     if not fresh_user or fresh_user["balance"] < price_inr:
@@ -882,7 +922,10 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
         )
         return
 
-    # STEP 1: Deduct balance BEFORE contacting reseller server to secure funds
+    # Update anti-hack cooldown timestamp immediately
+    last_purchase_time[user_id] = current_time_epoch
+
+    # STEP 1: STRICT PRE-DEDUCTION BEFORE RESELLER API CALL
     fresh_user["balance"] -= price_inr
     fresh_user["orders_count"] += 1
     fresh_user["total_spent"] += price_inr
@@ -919,7 +962,7 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
             pass
 
         if license_key and "error" not in str(license_key).lower():
-            # Log global purchase transaction
+            # SUCCESS: Log global transaction and save order record
             log_bot_transaction(user_id, "PURCHASE", price_inr, f"Bought {product_name} ({duration_text})")
 
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -939,14 +982,14 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
                 parse_mode="Markdown"
             )
         else:
-            # REFUND if API failed
+            # FAILURE: Automatic atomic refund back to user wallet
             fresh_user["balance"] += price_inr
             fresh_user["orders_count"] -= 1
             fresh_user["total_spent"] -= price_inr
             save_user(fresh_user)
             bot.send_message(call.message.chat.id, f"❌ **API Error / Purchase Failed (Balance Refunded)**\nServer response: `{raw_response[:300]}`", parse_mode="Markdown")
     except Exception as e:
-        # REFUND on exception
+        # EXCEPTION: Automatic atomic refund back to user wallet
         try:
             bot.delete_message(call.message.chat.id, proc_msg.message_id)
         except Exception:
@@ -1138,5 +1181,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT` (e.g., `6444009163 50`)", parse_mode="Markdown")
 
-print("Candid Store Bot is running with atomic balance deduction security!")
+print("Candid Store Bot is running with hardened security & anti-hack protection!")
 bot.infinity_polling()
