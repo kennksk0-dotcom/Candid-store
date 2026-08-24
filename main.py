@@ -18,12 +18,12 @@ XYZ_API_URL = "https://adminpanels.shop/api/reseller_v1.php"
 XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
-# 3. Supabase Cloud Database Connection (Loaded safely from Railway Environment Variables)
-SUPABASE_DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:candidstore1234123@db.uujpztqpiqtxcqoglbqh.supabase.co:5432/postgres?sslmode=require")
+# 3. Supabase Cloud Database Connection
+SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- CLOUD DATABASE SETUP (PostgreSQL / Supabase) ---
+# --- CLOUD DATABASE SETUP ---
 def get_db_connection():
     return psycopg2.connect(SUPABASE_DB_URL, sslmode='require')
 
@@ -71,74 +71,98 @@ init_db()
 def get_user(user_id):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
-    row = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    if row:
-        return {
-            "user_id": row["user_id"], "name": row["name"], "phone": row["phone"], "joined": row["joined"],
-            "balance": row["balance"], "total_spent": row["total_spent"], "orders_count": row["orders_count"],
-            "role": row["role"], "banned": bool(row["banned"]), "verified": bool(row["verified"]), "total_referrals": row["total_referrals"]
-        }
+    try:
+        cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return {
+                "user_id": row["user_id"],
+                "name": row["name"],
+                "phone": row["phone"],
+                "joined": row["joined"],
+                "balance": float(row["balance"] or 0.0),
+                "total_spent": float(row["total_spent"] or 0.0),
+                "orders_count": int(row["orders_count"] or 0),
+                "role": row["role"] or "Customer",
+                "banned": bool(row["banned"]),
+                "verified": bool(row["verified"]),
+                "total_referrals": int(row["total_referrals"] or 0)
+            }
+    except Exception as e:
+        print(f"Error fetching user: {e}")
+    finally:
+        cursor.close()
+        conn.close()
     return None
 
 def save_user(user_data):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO users (user_id, name, phone, joined, balance, total_spent, orders_count, role, banned, verified, total_referrals)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (user_id) DO UPDATE SET
-            name = EXCLUDED.name,
-            phone = EXCLUDED.phone,
-            balance = EXCLUDED.balance,
-            total_spent = EXCLUDED.total_spent,
-            orders_count = EXCLUDED.orders_count,
-            role = EXCLUDED.role,
-            banned = EXCLUDED.banned,
-            verified = EXCLUDED.verified,
-            total_referrals = EXCLUDED.total_referrals
-    ''', (
-        user_data["user_id"], user_data["name"], user_data.get("phone"), user_data["joined"],
-        user_data["balance"], user_data["total_spent"], user_data["orders_count"],
-        user_data["role"], int(user_data["banned"]), int(user_data["verified"]), user_data.get("total_referrals", 0)
-    ))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        cursor.execute('''
+            INSERT INTO users (user_id, name, phone, joined, balance, total_spent, orders_count, role, banned, verified, total_referrals)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                phone = EXCLUDED.phone,
+                balance = EXCLUDED.balance,
+                total_spent = EXCLUDED.total_spent,
+                orders_count = EXCLUDED.orders_count,
+                role = EXCLUDED.role,
+                banned = EXCLUDED.banned,
+                verified = EXCLUDED.verified,
+                total_referrals = EXCLUDED.total_referrals
+        ''', (
+            user_data["user_id"], user_data["name"], user_data.get("phone"), user_data["joined"],
+            user_data["balance"], user_data["total_spent"], user_data["orders_count"],
+            user_data["role"], int(user_data["banned"]), int(user_data["verified"]), user_data.get("total_referrals", 0)
+        ))
+        conn.commit()
+    except Exception as e:
+        print(f"Error saving user: {e}")
+    finally:
+        cursor.close()
+        conn.close()
 
 def check_timeout(user_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT timeout_until FROM spam_tracker WHERE user_id = %s', (user_id,))
-    row = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    if row and row[0]:
-        timeout_time = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
-        if datetime.now() < timeout_time:
-            return int((timeout_time - datetime.now()).total_seconds() / 60)
+    try:
+        cursor.execute('SELECT timeout_until FROM spam_tracker WHERE user_id = %s', (user_id,))
+        row = cursor.fetchone()
+        if row and row[0]:
+            timeout_time = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+            if datetime.now() < timeout_time:
+                return int((timeout_time - datetime.now()).total_seconds() / 60)
+    except Exception:
+        pass
+    finally:
+        cursor.close()
+        conn.close()
     return 0
 
 def add_abandon(user_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT abandon_count FROM spam_tracker WHERE user_id = %s', (user_id,))
-    row = cursor.fetchone()
-    count = (row[0] + 1) if row else 1
-    if count >= 7:
-        minutes = 15 * (2 ** (count - 7))
-        timeout_until = (datetime.now() + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
-    else:
-        timeout_until = None
-    cursor.execute('''
-        INSERT INTO spam_tracker (user_id, abandon_count, timeout_until) VALUES (%s, %s, %s)
-        ON CONFLICT (user_id) DO UPDATE SET abandon_count = EXCLUDED.abandon_count, timeout_until = EXCLUDED.timeout_until
-    ''', (user_id, count, timeout_until))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        cursor.execute('SELECT abandon_count FROM spam_tracker WHERE user_id = %s', (user_id,))
+        row = cursor.fetchone()
+        count = (row[0] + 1) if row else 1
+        if count >= 7:
+            minutes = 15 * (2 ** (count - 7))
+            timeout_until = (datetime.now() + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            timeout_until = None
+        cursor.execute('''
+            INSERT INTO spam_tracker (user_id, abandon_count, timeout_until) VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET abandon_count = EXCLUDED.abandon_count, timeout_until = EXCLUDED.timeout_until
+        ''', (user_id, count, timeout_until))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        cursor.close()
+        conn.close()
 
 user_orders = {}
 waiting_for_custom_topup = {}
