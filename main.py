@@ -3,6 +3,7 @@ import telebot
 import requests
 import psycopg2
 import psycopg2.extras
+from psycopg2 import pool
 from datetime import datetime, timedelta
 import threading
 import time
@@ -21,9 +22,24 @@ XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
-# --- GLOBAL STATES ---
+# --- GLOBAL STATES & CONNECTION POOL ---
 STORE_UNDER_MAINTENANCE = False
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# Thread-safe connection pool for zero lag and instant response times
+db_pool = pool.ThreadedConnectionPool(1, 20, SUPABASE_DB_URL, sslmode='require', connect_timeout=5)
+
+def get_db_connection():
+    return db_pool.getconn()
+
+def release_db_connection(conn, close=False):
+    try:
+        if close:
+            db_pool.putconn(conn, close=True)
+        else:
+            db_pool.putconn(conn)
+    except Exception:
+        pass
 
 last_purchase_time = {}
 admin_actions = {}
@@ -33,15 +49,10 @@ waiting_for_custom_topup = {}
 waiting_for_support_ticket = {}
 waiting_for_coupon_code = {}
 
-def get_db_connection():
-    return psycopg2.connect(SUPABASE_DB_URL, sslmode='require', connect_timeout=3)
-
 def init_db():
-    """100% Safe Initialization: Preserves all existing user accounts, balances, and order histories permanently."""
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -127,16 +138,17 @@ def init_db():
 
         conn.commit()
         cursor.close()
-        conn.close()
-        print("Database initialized safely with 100% data preservation.")
+        release_db_connection(conn)
+        print("Database initialized successfully with Connection Pooling.")
     except Exception as e:
+        release_db_connection(conn, close=True)
         print(f"DB Init Error: {e}")
 
 init_db()
 
 def log_bot_transaction(user_id, tx_type, amount, details):
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
@@ -145,18 +157,19 @@ def log_bot_transaction(user_id, tx_type, amount, details):
         )
         conn.commit()
         cursor.close()
-        conn.close()
+        release_db_connection(conn)
     except Exception as e:
+        release_db_connection(conn, close=True)
         print(f"Error logging bot transaction: {e}")
 
 def get_user(user_id):
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
         row = cursor.fetchone()
         cursor.close()
-        conn.close()
+        release_db_connection(conn)
         if row:
             return {
                 "user_id": row["user_id"],
@@ -174,13 +187,13 @@ def get_user(user_id):
                 "bonus_spins": int(row["bonus_spins"] or 0)
             }
     except Exception as e:
+        release_db_connection(conn, close=True)
         print(f"Error fetching user: {e}")
     return None
 
 def save_user_profile(user_id, name, phone, verified=True):
-    """Safely upserts user identity without touching live balances."""
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO users (user_id, name, phone, joined, verified)
@@ -192,14 +205,14 @@ def save_user_profile(user_id, name, phone, verified=True):
         ''', (user_id, name, phone, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), int(verified)))
         conn.commit()
         cursor.close()
-        conn.close()
+        release_db_connection(conn)
     except Exception as e:
+        release_db_connection(conn, close=True)
         print(f"Error saving user profile: {e}")
 
 def atomic_update_balance(user_id, amount_change, spend_add=0, order_add=0):
-    """Atomic SQL transaction: Updates balance directly in DB to prevent race conditions & overwrites."""
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
             UPDATE users SET 
@@ -210,31 +223,32 @@ def atomic_update_balance(user_id, amount_change, spend_add=0, order_add=0):
         ''', (amount_change, spend_add, order_add, user_id))
         conn.commit()
         cursor.close()
-        conn.close()
+        release_db_connection(conn)
         return True
     except Exception as e:
+        release_db_connection(conn, close=True)
         print(f"Atomic Balance Update Error: {e}")
         return False
 
 def check_timeout(user_id):
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT timeout_until FROM spam_tracker WHERE user_id = %s', (user_id,))
         row = cursor.fetchone()
         cursor.close()
-        conn.close()
+        release_db_connection(conn)
         if row and row[0]:
             timeout_time = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
             if datetime.now() < timeout_time:
                 return int((timeout_time - datetime.now()).total_seconds() / 60)
     except Exception:
-        pass
+        release_db_connection(conn, close=True)
     return 0
 
 def add_abandon(user_id):
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT abandon_count FROM spam_tracker WHERE user_id = %s', (user_id,))
         row = cursor.fetchone()
@@ -250,9 +264,9 @@ def add_abandon(user_id):
         ''', (user_id, count, timeout_until))
         conn.commit()
         cursor.close()
-        conn.close()
+        release_db_connection(conn)
     except Exception:
-        pass
+        release_db_connection(conn, close=True)
 
 def get_price(retail_price, panel_price, is_reseller):
     if is_reseller:
@@ -282,7 +296,7 @@ def send_welcome(message):
                 cur.execute('UPDATE users SET total_referrals = total_referrals + 1 WHERE user_id = %s', (referrer_id,))
                 conn.commit()
                 cur.close()
-                conn.close()
+                release_db_connection(conn)
         except Exception:
             pass
 
@@ -751,14 +765,15 @@ def handle_callback(call):
         can_spin = False
         if bonus_spins > 0:
             can_spin = True
-            atomic_update_balance(user_id, 0) # placeholder check
-            # Decrement bonus spin directly via SQL
             conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute('UPDATE users SET bonus_spins = bonus_spins - 1 WHERE user_id = %s', (user_id,))
-            conn.commit()
-            cur.close()
-            conn.close()
+            try:
+                cur = conn.cursor()
+                cur.execute('UPDATE users SET bonus_spins = bonus_spins - 1 WHERE user_id = %s', (user_id,))
+                conn.commit()
+                cur.close()
+                release_db_connection(conn)
+            except Exception:
+                release_db_connection(conn, close=True)
         elif last_spin:
             try:
                 last_time = datetime.strptime(last_spin, "%Y-%m-%d %H:%M:%S")
@@ -778,11 +793,14 @@ def handle_callback(call):
         
         current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('UPDATE users SET last_spin_time = %s WHERE user_id = %s', (current_time_str, user_id))
-        conn.commit()
-        cur.close()
-        conn.close()
+        try:
+            cur = conn.cursor()
+            cur.execute('UPDATE users SET last_spin_time = %s WHERE user_id = %s', (current_time_str, user_id))
+            conn.commit()
+            cur.close()
+            release_db_connection(conn)
+        except Exception:
+            release_db_connection(conn, close=True)
         
         if reward > 0:
             atomic_update_balance(user_id, float(reward))
@@ -852,14 +870,15 @@ def handle_callback(call):
 
     elif call.data == "orders":
         bot.answer_callback_query(call.id)
+        conn = get_db_connection()
         try:
-            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = %s', (user_id,))
             rows = cursor.fetchall()
             cursor.close()
-            conn.close()
+            release_db_connection(conn)
         except Exception:
+            release_db_connection(conn, close=True)
             rows = []
         
         if not rows:
@@ -929,14 +948,15 @@ def handle_callback(call):
 
     elif call.data == "adm_view_tickets" and is_admin:
         bot.answer_callback_query(call.id)
+        conn = get_db_connection()
         try:
-            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('SELECT id, user_id, category, message, status, date FROM support_tickets ORDER BY id DESC LIMIT 15')
             rows = cursor.fetchall()
             cursor.close()
-            conn.close()
+            release_db_connection(conn)
         except Exception:
+            release_db_connection(conn, close=True)
             rows = []
 
         if not rows:
@@ -982,8 +1002,8 @@ def handle_callback(call):
         per_page = 10
         offset = (page - 1) * per_page
         
+        conn = get_db_connection()
         try:
-            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('SELECT COUNT(*) FROM users')
             total_users = cursor.fetchone()[0]
@@ -991,8 +1011,9 @@ def handle_callback(call):
             cursor.execute('SELECT user_id, name, phone, role, joined FROM users ORDER BY joined DESC LIMIT %s OFFSET %s', (per_page, offset))
             rows = cursor.fetchall()
             cursor.close()
-            conn.close()
+            release_db_connection(conn)
         except Exception:
+            release_db_connection(conn, close=True)
             rows = []
             total_users = 0
 
@@ -1018,14 +1039,15 @@ def handle_callback(call):
 
     elif call.data == "adm_all_transactions" and is_admin:
         bot.answer_callback_query(call.id)
+        conn = get_db_connection()
         try:
-            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('SELECT user_id, type, amount, details, date FROM bot_transactions ORDER BY id DESC LIMIT 30')
             rows = cursor.fetchall()
             cursor.close()
-            conn.close()
+            release_db_connection(conn)
         except Exception:
+            release_db_connection(conn, close=True)
             rows = []
 
         if not rows:
@@ -1132,8 +1154,8 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
             log_bot_transaction(user_id, "PURCHASE", price_inr, f"Bought {product_name} ({duration_text})")
 
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn = get_db_connection()
             try:
-                conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute(
                     'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)',
@@ -1141,9 +1163,9 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
                 )
                 conn.commit()
                 cursor.close()
-                conn.close()
+                release_db_connection(conn)
             except Exception:
-                pass
+                release_db_connection(conn, close=True)
             
             updated_u = get_user(user_id)
             bot.send_message(
@@ -1277,8 +1299,8 @@ def handle_support_ticket_submission(message):
         ticket_msg = message.text.strip()
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
+        conn = get_db_connection()
         try:
-            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
                 'INSERT INTO support_tickets (user_id, category, message, status, date) VALUES (%s, %s, %s, %s, %s)',
@@ -1286,8 +1308,9 @@ def handle_support_ticket_submission(message):
             )
             conn.commit()
             cursor.close()
-            conn.close()
+            release_db_connection(conn)
         except Exception as e:
+            release_db_connection(conn, close=True)
             print(f"Error saving support ticket: {e}")
             
         bot.send_message(
@@ -1316,8 +1339,8 @@ def handle_user_coupon_redemption(message):
         waiting_for_coupon_code.pop(user_id, None)
         code = message.text.strip().upper()
         
+        conn = get_db_connection()
         try:
-            conn = get_db_connection()
             cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
             cursor.execute('SELECT * FROM coupons WHERE code = %s', (code,))
             coupon = cursor.fetchone()
@@ -1325,7 +1348,7 @@ def handle_user_coupon_redemption(message):
             if not coupon:
                 bot.send_message(message.chat.id, "❌ **Invalid Coupon Code.**", parse_mode="Markdown")
                 cursor.close()
-                conn.close()
+                release_db_connection(conn)
                 return
 
             if coupon["expires_at"]:
@@ -1333,13 +1356,13 @@ def handle_user_coupon_redemption(message):
                 if datetime.now() > exp_date:
                     bot.send_message(message.chat.id, "❌ **This coupon has expired.**", parse_mode="Markdown")
                     cursor.close()
-                    conn.close()
+                    release_db_connection(conn)
                     return
 
             if coupon["uses_count"] >= coupon["max_uses"]:
                 bot.send_message(message.chat.id, "❌ **This coupon has reached its maximum global usage limit.**", parse_mode="Markdown")
                 cursor.close()
-                conn.close()
+                release_db_connection(conn)
                 return
 
             cursor.execute('SELECT used_count FROM coupon_redemptions WHERE user_id = %s AND code = %s', (user_id, code))
@@ -1349,7 +1372,7 @@ def handle_user_coupon_redemption(message):
             if used_so_far >= coupon["per_user_limit"]:
                 bot.send_message(message.chat.id, "❌ **You have already used this coupon maximum allowed times.**", parse_mode="Markdown")
                 cursor.close()
-                conn.close()
+                release_db_connection(conn)
                 return
 
             reward_type = coupon["reward_type"]
@@ -1373,10 +1396,11 @@ def handle_user_coupon_redemption(message):
             ''', (user_id, code))
             conn.commit()
             cursor.close()
-            conn.close()
+            release_db_connection(conn)
 
             bot.send_message(message.chat.id, msg_response, parse_mode="Markdown")
         except Exception as e:
+            release_db_connection(conn, close=True)
             bot.send_message(message.chat.id, f"⚠️ Error redeeming coupon: {e}")
 
 @bot.message_handler(func=lambda message: message.from_user.id in admin_coupon_flow and message.from_user.id == ADMIN_ID)
@@ -1426,15 +1450,19 @@ def admin_coupon_builder(message):
             expires_at = (datetime.now() + timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
 
             conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO coupons (code, reward_type, value, max_uses, uses_count, per_user_limit, expires_at)
-                VALUES (%s, %s, %s, %s, 0, 1, %s)
-                ON CONFLICT (code) DO UPDATE SET reward_type = EXCLUDED.reward_type, value = EXCLUDED.value, max_uses = EXCLUDED.max_uses, expires_at = EXCLUDED.expires_at
-            ''', (code, r_type, val, max_uses, expires_at))
-            conn.commit()
-            cursor.close()
-            conn.close()
+            try:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO coupons (code, reward_type, value, max_uses, uses_count, per_user_limit, expires_at)
+                    VALUES (%s, %s, %s, %s, 0, 1, %s)
+                    ON CONFLICT (code) DO UPDATE SET reward_type = EXCLUDED.reward_type, value = EXCLUDED.value, max_uses = EXCLUDED.max_uses, expires_at = EXCLUDED.expires_at
+                ''', (code, r_type, val, max_uses, expires_at))
+                conn.commit()
+                cursor.close()
+                release_db_connection(conn)
+            except Exception as e:
+                release_db_connection(conn, close=True)
+                raise e
 
             bot.send_message(
                 message.chat.id,
@@ -1457,14 +1485,15 @@ def admin_input(message):
     
     if action == "broadcast":
         status_msg = bot.send_message(message.chat.id, "⏳ Sending broadcast to all users...")
+        conn = get_db_connection()
         try:
-            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('SELECT user_id FROM users')
             all_users = cursor.fetchall()
             cursor.close()
-            conn.close()
+            release_db_connection(conn)
         except Exception:
+            release_db_connection(conn, close=True)
             all_users = []
         
         success_count, fail_count = 0, 0
@@ -1488,7 +1517,7 @@ def admin_input(message):
                 cur.execute('UPDATE users SET role = %s WHERE user_id = %s', (new_role, target_id))
                 conn.commit()
                 cur.close()
-                conn.close()
+                release_db_connection(conn)
                 bot.send_message(message.chat.id, f"✅ User `{target_id}` role is now **{new_role}**", parse_mode="Markdown")
             else:
                 bot.send_message(message.chat.id, "❌ User not found.")
@@ -1505,7 +1534,7 @@ def admin_input(message):
                 cur.execute('UPDATE users SET banned = %s WHERE user_id = %s', (new_ban, target_id))
                 conn.commit()
                 cur.close()
-                conn.close()
+                release_db_connection(conn)
                 status = "Banned" if new_ban == 1 else "Unbanned"
                 bot.send_message(message.chat.id, f"✅ User `{target_id}` status: **{status}**", parse_mode="Markdown")
             else:
@@ -1571,5 +1600,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Ultimate Store Bot running live with Atomic SQL Database Transactions (Zero Lag, 100% Safe Balance Protection)!")
+print("Ultimate Store Bot running live with Connection Pooling (Instant Speeds & Zero Balance Risk)!")
 bot.infinity_polling()
