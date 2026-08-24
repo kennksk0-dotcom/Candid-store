@@ -23,12 +23,13 @@ SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
 # --- GLOBAL STATES & CACHE ---
 STORE_UNDER_MAINTENANCE = False
-user_cache = {}  # Instant RAM cache to eliminate network lag
+user_cache = {}  # Instant RAM cache for zero lag
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
 last_purchase_time = {}
 admin_actions = {}
+admin_coupon_flow = {}
 user_orders = {}
 waiting_for_custom_topup = {}
 waiting_for_support_ticket = {}
@@ -38,9 +39,12 @@ def get_db_connection():
     return psycopg2.connect(SUPABASE_DB_URL, sslmode='require', connect_timeout=3)
 
 def init_db():
+    """Safe initialization: Creates tables if missing, and safely injects new columns without wiping existing data or balances."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        
+        # 1. Users Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -54,9 +58,16 @@ def init_db():
                 banned INTEGER DEFAULT 0,
                 verified INTEGER DEFAULT 0,
                 total_referrals INTEGER DEFAULT 0,
-                last_spin_time TEXT
+                last_spin_time TEXT,
+                bonus_spins INTEGER DEFAULT 0
             )
         ''')
+        # Safe column migrations for older tables
+        cursor.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_spins INTEGER DEFAULT 0;')
+        cursor.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referrals INTEGER DEFAULT 0;')
+        cursor.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_spin_time TEXT;')
+
+        # 2. Orders Table (Preserves all past purchase histories)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 id SERIAL PRIMARY KEY,
@@ -67,6 +78,8 @@ def init_db():
                 date TEXT
             )
         ''')
+
+        # 3. Bot Transactions Ledger
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS bot_transactions (
                 id SERIAL PRIMARY KEY,
@@ -77,6 +90,8 @@ def init_db():
                 date TEXT
             )
         ''')
+
+        # 4. Support Tickets Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS support_tickets (
                 id SERIAL PRIMARY KEY,
@@ -87,6 +102,8 @@ def init_db():
                 date TEXT
             )
         ''')
+
+        # 5. Coupons Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS coupons (
                 code TEXT PRIMARY KEY,
@@ -98,6 +115,8 @@ def init_db():
                 expires_at TEXT
             )
         ''')
+
+        # 6. Coupon Redemptions Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS coupon_redemptions (
                 user_id BIGINT,
@@ -106,6 +125,8 @@ def init_db():
                 PRIMARY KEY (user_id, code)
             )
         ''')
+
+        # 7. Spam Tracker Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS spam_tracker (
                 user_id BIGINT PRIMARY KEY,
@@ -113,9 +134,11 @@ def init_db():
                 timeout_until TEXT
             )
         ''')
+
         conn.commit()
         cursor.close()
         conn.close()
+        print("Database initialized successfully with 100% data preservation safety.")
     except Exception as e:
         print(f"DB Init Error: {e}")
 
@@ -137,7 +160,6 @@ def log_bot_transaction(user_id, tx_type, amount, details):
         print(f"Error logging bot transaction: {e}")
 
 def get_user(user_id):
-    """Lightning-fast RAM cached fetch with automatic DB fallback"""
     if user_id in user_cache:
         return user_cache[user_id]
         
@@ -161,7 +183,8 @@ def get_user(user_id):
                 "banned": bool(row["banned"]),
                 "verified": bool(row["verified"]),
                 "total_referrals": int(row["total_referrals"] or 0),
-                "last_spin_time": row["last_spin_time"]
+                "last_spin_time": row["last_spin_time"],
+                "bonus_spins": int(row["bonus_spins"] or 0)
             }
             user_cache[user_id] = user_data
             return user_data
@@ -170,14 +193,13 @@ def get_user(user_id):
     return None
 
 def save_user(user_data):
-    """Updates local cache instantly and syncs to Supabase cloud database"""
     user_cache[user_data["user_id"]] = user_data
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO users (user_id, name, phone, joined, balance, total_spent, orders_count, role, banned, verified, total_referrals, last_spin_time)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO users (user_id, name, phone, joined, balance, total_spent, orders_count, role, banned, verified, total_referrals, last_spin_time, bonus_spins)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 phone = EXCLUDED.phone,
@@ -188,12 +210,13 @@ def save_user(user_data):
                 banned = EXCLUDED.banned,
                 verified = EXCLUDED.verified,
                 total_referrals = EXCLUDED.total_referrals,
-                last_spin_time = EXCLUDED.last_spin_time
+                last_spin_time = EXCLUDED.last_spin_time,
+                bonus_spins = EXCLUDED.bonus_spins
         ''', (
             user_data["user_id"], user_data["name"], user_data.get("phone"), user_data["joined"],
             user_data["balance"], user_data["total_spent"], user_data["orders_count"],
             user_data["role"], int(user_data["banned"]), int(user_data["verified"]), user_data.get("total_referrals", 0),
-            user_data.get("last_spin_time")
+            user_data.get("last_spin_time"), user_data.get("bonus_spins", 0)
         ))
         conn.commit()
         cursor.close()
@@ -273,7 +296,7 @@ def send_welcome(message):
                 "user_id": user_id, "name": message.from_user.first_name, "phone": None,
                 "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "balance": 0.0,
                 "total_spent": 0.0, "orders_count": 0, "role": "Customer", "banned": False,
-                "verified": False, "total_referrals": 0, "last_spin_time": None
+                "verified": False, "total_referrals": 0, "last_spin_time": None, "bonus_spins": 0
             })
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         markup.add(telebot.types.KeyboardButton("🛡️ Share Contact for Verification", request_contact=True))
@@ -300,7 +323,7 @@ def handle_contact(message):
                 "user_id": user_id, "name": message.from_user.first_name, "phone": message.contact.phone_number,
                 "joined": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "balance": 0.0,
                 "total_spent": 0.0, "orders_count": 0, "role": "Customer", "banned": False,
-                "verified": True, "total_referrals": 0, "last_spin_time": None
+                "verified": True, "total_referrals": 0, "last_spin_time": None, "bonus_spins": 0
             })
         bot.send_message(message.chat.id, "✅ Verification Successful!", reply_markup=telebot.types.ReplyKeyboardRemove(), parse_mode="Markdown")
         show_main_menu(message.chat.id, user_id)
@@ -349,7 +372,6 @@ def handle_callback(call):
     user_id = call.from_user.id
     user = get_user(user_id)
     
-    # Absolute Ban Lockade enforcement
     if user and user["banned"]:
         bot.answer_callback_query(call.id, text="❌ Access Denied: Account Suspended.", show_alert=True)
         bot.send_message(call.message.chat.id, "❌ **Your account is banned. No actions are permitted.**", parse_mode="Markdown")
@@ -381,6 +403,7 @@ def handle_callback(call):
         waiting_for_support_ticket.pop(user_id, None)
         waiting_for_coupon_code.pop(user_id, None)
         admin_actions.pop(user_id, None)
+        admin_coupon_flow.pop(user_id, None)
 
     if call.data == "all_products":
         bot.answer_callback_query(call.id)
@@ -704,10 +727,13 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         fresh_user = get_user(user_id)
         last_spin = fresh_user.get("last_spin_time")
+        bonus_spins = fresh_user.get("bonus_spins", 0)
         
         can_spin = True
         remaining_hours = 0
-        if last_spin:
+        if bonus_spins > 0:
+            can_spin = True
+        elif last_spin:
             try:
                 last_time = datetime.strptime(last_spin, "%Y-%m-%d %H:%M:%S")
                 elapsed_hours = (datetime.now() - last_time).total_seconds() / 3600.0
@@ -725,7 +751,8 @@ def handle_callback(call):
         if can_spin:
             spin_text = (
                 "🎡 **LUCKY SPIN SYSTEM** 🎡\n\n"
-                "✨ Spin the wheel to win free balance (₹1 to ₹5) or exclusive rewards!\n"
+                f"✨ Bonus Spins Available: **{bonus_spins}**\n"
+                "✨ Spin the wheel to win free balance (₹1 to ₹5) or rewards!\n"
                 "⏳ You are eligible to spin now."
             )
         else:
@@ -737,15 +764,26 @@ def handle_callback(call):
 
     elif call.data == "do_lucky_spin":
         fresh_user = get_user(user_id)
+        bonus_spins = fresh_user.get("bonus_spins", 0)
         last_spin = fresh_user.get("last_spin_time")
-        if last_spin:
+        
+        can_spin = False
+        if bonus_spins > 0:
+            can_spin = True
+            fresh_user["bonus_spins"] -= 1
+        elif last_spin:
             try:
                 last_time = datetime.strptime(last_spin, "%Y-%m-%d %H:%M:%S")
-                if (datetime.now() - last_time).total_seconds() / 3600.0 < 24.0:
-                    bot.answer_callback_query(call.id, text="Cooldown active!", show_alert=True)
-                    return
+                if (datetime.now() - last_time).total_seconds() / 3600.0 >= 24.0:
+                    can_spin = True
             except Exception:
                 pass
+        else:
+            can_spin = True
+
+        if not can_spin:
+            bot.answer_callback_query(call.id, text="Cooldown active!", show_alert=True)
+            return
 
         outcome_weights = [0, 0, 0, 0, 1, 1, 1, 1, 5]
         reward = random.choice(outcome_weights)
@@ -758,7 +796,7 @@ def handle_callback(call):
             log_bot_transaction(user_id, "LUCKY_SPIN", float(reward), f"Won ₹{reward} from Lucky Spin")
             result_msg = f"🎉 **CONGRATULATIONS!** You won `₹{reward}` free wallet balance!"
         else:
-            result_msg = "😢 **No Reward!** Better luck next time. Spin resets in 24 hours."
+            result_msg = "😢 **No Reward!** Better luck next time."
 
         save_user(fresh_user)
         bot.answer_callback_query(call.id, text=f"Spin Result: {reward if reward > 0 else 'No Win'}", show_alert=True)
@@ -798,61 +836,6 @@ def handle_callback(call):
         add_abandon(user_id)
         user_orders.pop(user_id, None)
         bot.edit_message_text("❌ **Order Cancelled.**", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
-
-    elif call.data == "check_topup":
-        bot.answer_callback_query(call.id, text="Verifying payment...")
-        
-        if user_id not in user_orders:
-            bot.send_message(call.message.chat.id, "❌ No active top-up session or already processed/expired.")
-            return
-            
-        order_info = user_orders.pop(user_id)
-        order_id = order_info["order_id"]
-        amount_inr = order_info["amount"]
-        
-        if datetime.now() > order_info["expires_at"]:
-            try:
-                bot.delete_message(call.message.chat.id, order_info["msg_id"])
-            except Exception:
-                pass
-            bot.send_message(call.message.chat.id, f"❌ **Your payment QR code for ₹{amount_inr} has expired.**", parse_mode="Markdown")
-            return
-
-        headers = {"Authorization": f"Bearer {FAMPAY_API_KEY}"}
-        try:
-            verify = requests.get(f"{FAMPAY_BASE_URL}/verify/{order_id}", headers=headers).json()
-            if verify.get("status") == "success":
-                user["balance"] += amount_inr
-                save_user(user)
-                log_bot_transaction(user_id, "TOPUP", amount_inr, f"FamPay UPI Topup ID: {order_id}")
-                
-                try:
-                    bot.delete_message(call.message.chat.id, order_info["msg_id"])
-                except Exception:
-                    pass
-                
-                success_text = (
-                    "🎉 **PAYMENT SUCCESSFUL!** 🎉\n\n"
-                    f"💳 **Added to Wallet:** `₹{amount_inr:.2f}`\n"
-                    f"💰 **New Total Balance:** `₹{user['balance']:.2f}`\n\n"
-                    "✨ Thank you for topping up!"
-                )
-                bot.send_message(call.message.chat.id, success_text, parse_mode="Markdown")
-            else:
-                if order_info.get("retry_count", 0) == 0:
-                    order_info["retry_count"] = 1
-                    user_orders[user_id] = order_info
-                    pending_text = "⏳ **PAYMENT NOT RECEIVED YET**\n\nComplete payment via your UPI app, then click Try Again."
-                    markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔄 Try Again", callback_data="check_topup"))
-                    bot.send_message(call.message.chat.id, pending_text, parse_mode="Markdown", reply_markup=markup)
-                else:
-                    try:
-                        bot.delete_message(call.message.chat.id, order_info["msg_id"])
-                    except Exception:
-                        pass
-                    bot.send_message(call.message.chat.id, "❌ **Payment verification failed.** Open a support ticket if funds were deducted.", parse_mode="Markdown")
-        except Exception:
-            bot.send_message(call.message.chat.id, "⚠️ Network error while verifying payment.", parse_mode="Markdown")
 
     elif call.data == "profile":
         bot.answer_callback_query(call.id)
@@ -975,15 +958,26 @@ def handle_callback(call):
 
     elif call.data == "adm_create_coupon" and is_admin:
         bot.answer_callback_query(call.id)
-        admin_actions[user_id] = "create_coupon"
+        admin_coupon_flow[user_id] = {"step": "code"}
         bot.send_message(
             call.message.chat.id,
-            "🏷️ **CREATE COUPON / REDEEM CODE**\n\n"
-            "Send format: `CODE TYPE VALUE MAX_USES PER_USER_LIMIT DAYS_VALID`\n"
-            "• `TYPE`: `balance` (rupees) or `percent` (% off)\n"
-            "• Example: `SUMMER25 percent 25 1 1 7`",
+            "🏷️ **STEP 1: CREATE COUPON**\n\nPlease reply with the **Coupon Code** name (e.g., `WELCOME50`):",
             parse_mode="Markdown"
         )
+
+    elif call.data.startswith("adm_coupon_type_") and is_admin:
+        bot.answer_callback_query(call.id)
+        r_type = call.data.split("_")[3] # balance, discount, spin
+        if user_id in admin_coupon_flow:
+            admin_coupon_flow[user_id]["type"] = r_type
+            admin_coupon_flow[user_id]["step"] = "value"
+            
+            val_prompt = {
+                "balance": "💳 Please reply with the **Amount in Rupees** (e.g., `100`):",
+                "discount": "🏷️ Please reply with the **Discount Percentage** (e.g., `25` for 25% off):",
+                "spin": "🎡 Please reply with the **Number of Bonus Spins** (e.g., `5`):"
+            }
+            bot.send_message(call.message.chat.id, val_prompt[r_type], parse_mode="Markdown")
 
     elif call.data.startswith("adm_users_list_") and is_admin:
         bot.answer_callback_query(call.id)
@@ -1108,7 +1102,6 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
 
     last_purchase_time[user_id] = current_time_epoch
 
-    # Pre-deduction safeguard
     fresh_user["balance"] -= price_inr
     fresh_user["orders_count"] += 1
     fresh_user["total_spent"] += price_inr
@@ -1167,7 +1160,6 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
                 parse_mode="Markdown"
             )
         else:
-            # Atomic automatic refund on failure
             fresh_user["balance"] += price_inr
             fresh_user["orders_count"] -= 1
             fresh_user["total_spent"] -= price_inr
@@ -1201,7 +1193,6 @@ def create_topup_order(message_obj, user_id, amount_inr):
             expires_at = datetime.now() + timedelta(minutes=5)
             
             markup = telebot.types.InlineKeyboardMarkup()
-            markup.add(telebot.types.InlineKeyboardButton("✅ I Have Paid", callback_data="check_topup"))
             markup.add(telebot.types.InlineKeyboardButton("❌ Cancel Order", callback_data="cancel_topup"))
             
             caption_text = (
@@ -1209,7 +1200,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
                 f"🆔 ID: `{order_id}`\n\n"
                 f"⏱️ **Expires in:** 5 Minutes\n\n"
                 f"🔗 **Payment Link:**\n`{pay_link}`\n\n"
-                f"Scan the QR code or pay via UPI app, then click **I Have Paid**."
+                f"📲 **Scan the QR code or pay via UPI.**\n*(Balance will be added automatically upon payment confirmation!)*"
             )
             sent_msg = bot.send_photo(chat_id, qr_image_url, caption=caption_text, parse_mode="Markdown", reply_markup=markup)
             
@@ -1217,21 +1208,54 @@ def create_topup_order(message_obj, user_id, amount_inr):
                 "order_id": order_id, 
                 "amount": amount_inr, 
                 "expires_at": expires_at,
-                "msg_id": sent_msg.message_id,
-                "retry_count": 0
+                "msg_id": sent_msg.message_id
             }
 
-            def expire_order(u_id, target_msg_id, target_order_id):
-                time.sleep(300)
+            def poll_payment_status(u_id, target_order_id, target_amount, msg_id):
+                headers_verify = {"Authorization": f"Bearer {FAMPAY_API_KEY}"}
+                for _ in range(60):
+                    time.sleep(5)
+                    if u_id not in user_orders or user_orders[u_id]["order_id"] != target_order_id:
+                        break
+                    
+                    try:
+                        verify = requests.get(f"{FAMPAY_BASE_URL}/verify/{target_order_id}", headers=headers_verify).json()
+                        if verify.get("status") == "success":
+                            active_order = user_orders.pop(u_id, None)
+                            if not active_order:
+                                break
+                            
+                            usr = get_user(u_id)
+                            if usr:
+                                usr["balance"] += target_amount
+                                save_user(usr)
+                                log_bot_transaction(u_id, "TOPUP", target_amount, f"FamPay Automatic UPI Topup ID: {target_order_id}")
+                                
+                                try:
+                                    bot.delete_message(chat_id, msg_id)
+                                except Exception:
+                                    pass
+                                
+                                success_text = (
+                                    "🎉 **PAYMENT SUCCESSFUL!** 🎉\n\n"
+                                    f"💳 **Added to Wallet:** `₹{target_amount:.2f}`\n"
+                                    f"💰 **New Total Balance:** `₹{usr['balance']:.2f}`\n\n"
+                                    "✨ Thank you for topping up!"
+                                )
+                                bot.send_message(chat_id, success_text, parse_mode="Markdown")
+                            break
+                    except Exception:
+                        pass
+                
                 if u_id in user_orders and user_orders[u_id]["order_id"] == target_order_id:
                     user_orders.pop(u_id, None)
                     try:
-                        bot.delete_message(chat_id, target_msg_id)
+                        bot.delete_message(chat_id, msg_id)
                     except Exception:
                         pass
                     bot.send_message(chat_id, f"❌ **Your payment QR code for ₹{amount_inr} has expired.**", parse_mode="Markdown")
 
-            threading.Thread(target=expire_order, args=(user_id, sent_msg.message_id, order_id), daemon=True).start()
+            threading.Thread(target=poll_payment_status, args=(user_id, order_id, amount_inr, sent_msg.message_id), daemon=True).start()
         else:
             bot.send_message(chat_id, f"❌ FamAPI Error Response: {res_data}")
     except Exception as e:
@@ -1350,6 +1374,11 @@ def handle_user_coupon_redemption(message):
                 save_user(user)
                 log_bot_transaction(user_id, "COUPON_REDEEM", value, f"Redeemed coupon {code}")
                 msg_response = f"🎉 **Coupon Redeemed Successfully!**\n\n💳 Added `₹{value:.2f}` to your wallet balance."
+            elif reward_type == "spin":
+                user["bonus_spins"] = user.get("bonus_spins", 0) + int(value)
+                save_user(user)
+                log_bot_transaction(user_id, "COUPON_SPIN", 0, f"Redeemed coupon {code} for {int(value)} spins")
+                msg_response = f"🎉 **Coupon Redeemed Successfully!**\n\n🎡 Added `{int(value)}` bonus spins to your account."
             else:
                 msg_response = f"🎉 **Coupon Validated!**\n\n🏷️ Coupon **{code}** grants `{value}% off` on your next order."
 
@@ -1365,6 +1394,76 @@ def handle_user_coupon_redemption(message):
             bot.send_message(message.chat.id, msg_response, parse_mode="Markdown")
         except Exception as e:
             bot.send_message(message.chat.id, f"⚠️ Error redeeming coupon: {e}")
+
+@bot.message_handler(func=lambda message: message.from_user.id in admin_coupon_flow and message.from_user.id == ADMIN_ID)
+def admin_coupon_builder(message):
+    admin_id = message.from_user.id
+    flow = admin_coupon_flow[admin_id]
+    text = message.text.strip()
+    
+    if flow["step"] == "code":
+        flow["code"] = text.upper()
+        flow["step"] = "type_select"
+        
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("💳 Balance", callback_data="adm_coupon_type_balance"))
+        markup.add(telebot.types.InlineKeyboardButton("🏷️ Discount (%)", callback_data="adm_coupon_type_discount"))
+        markup.add(telebot.types.InlineKeyboardButton("🎡 Lucky Spin", callback_data="adm_coupon_type_spin"))
+        
+        bot.send_message(message.chat.id, f"🏷️ **STEP 2: SELECT TYPE**\n\nCode: `{flow['code']}`\nChoose reward type below:", parse_mode="Markdown", reply_markup=markup)
+
+    elif flow["step"] == "value":
+        try:
+            flow["value"] = float(text)
+            flow["step"] = "max_users"
+            bot.send_message(message.chat.id, "👥 **STEP 4: MAX USERS LIMIT**\n\nPlease reply with the **maximum total users** who can claim this coupon (e.g., `1` for single user):", parse_mode="Markdown")
+        except ValueError:
+            bot.send_message(message.chat.id, "❌ Invalid number. Please send a valid numeric value.")
+
+    elif flow["step"] == "max_users":
+        try:
+            flow["max_users"] = int(text)
+            flow["step"] = "hours"
+            bot.send_message(message.chat.id, "⏳ **STEP 5: VALIDITY HOURS**\n\nPlease reply with the **active duration in hours** before it expires (e.g., `24`):", parse_mode="Markdown")
+        except ValueError:
+            bot.send_message(message.chat.id, "❌ Invalid integer. Please enter valid hours.")
+
+    elif flow["step"] == "hours":
+        try:
+            hours = int(text)
+            admin_coupon_flow.pop(admin_id, None)
+            
+            code = flow["code"]
+            r_type = flow["type"]
+            if r_type == "discount":
+                r_type = "percent"
+            val = flow["value"]
+            max_uses = flow["max_users"]
+            expires_at = (datetime.now() + timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO coupons (code, reward_type, value, max_uses, uses_count, per_user_limit, expires_at)
+                VALUES (%s, %s, %s, %s, 0, 1, %s)
+                ON CONFLICT (code) DO UPDATE SET reward_type = EXCLUDED.reward_type, value = EXCLUDED.value, max_uses = EXCLUDED.max_uses, expires_at = EXCLUDED.expires_at
+            ''', (code, r_type, val, max_uses, expires_at))
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            bot.send_message(
+                message.chat.id,
+                f"✅ **COUPON CREATED SUCCESSFULLY!**\n\n"
+                f"🏷️ Code: `{code}`\n"
+                f"📌 Type: `{r_type}` (Value: {val})\n"
+                f"👥 Max Total Users: {max_uses} (1 time per user)\n"
+                f"⏳ Active Lifespan: {hours} Hours\n"
+                f"📅 Expires At: {expires_at}",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ Error saving coupon: {e}")
 
 @bot.message_handler(func=lambda message: message.from_user.id in admin_actions and message.from_user.id == ADMIN_ID)
 def admin_input(message):
@@ -1393,36 +1492,6 @@ def admin_input(message):
                 fail_count += 1
                 
         bot.edit_message_text(f"✅ **Broadcast Completed!**\n\n📤 Sent: {success_count}\n❌ Failed: {fail_count}", message.chat.id, status_msg.message_id, parse_mode="Markdown")
-
-    elif action == "create_coupon":
-        try:
-            parts = text.split()
-            code = parts[0].upper()
-            r_type = parts[1].lower()
-            val = float(parts[2])
-            max_uses = int(parts[3])
-            per_user = int(parts[4])
-            days = int(parts[5])
-            expires_at = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO coupons (code, reward_type, value, max_uses, uses_count, per_user_limit, expires_at)
-                VALUES (%s, %s, %s, %s, 0, %s, %s)
-                ON CONFLICT (code) DO UPDATE SET reward_type = EXCLUDED.reward_type, value = EXCLUDED.value, max_uses = EXCLUDED.max_uses, per_user_limit = EXCLUDED.per_user_limit, expires_at = EXCLUDED.expires_at
-            ''', (code, r_type, val, max_uses, per_user, expires_at))
-            conn.commit()
-            cursor.close()
-            conn.close()
-
-            bot.send_message(
-                message.chat.id,
-                f"✅ **Coupon Created!**\n\n🏷️ Code: `{code}`\n📌 Type: `{r_type}` ({val})\n👥 Max Uses: {max_uses} | Per User: {per_user}\n📅 Expires: {expires_at}",
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            bot.send_message(message.chat.id, f"❌ Format Error. Use: `CODE TYPE VALUE MAX_USES PER_USER_LIMIT DAYS`\nError: {e}")
 
     elif action == "reseller":
         try:
@@ -1507,5 +1576,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Ultimate Store Bot running instantly with zero lag, cache sync, pagination, and anti-double credit lock!")
+print("Ultimate Store Bot running with 100% Data Preservation, Automated Payments, and Interactive Coupon Generator!")
 bot.infinity_polling()
