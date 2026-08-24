@@ -21,10 +21,8 @@ XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
-# --- GLOBAL STATES & CACHE ---
+# --- GLOBAL STATES ---
 STORE_UNDER_MAINTENANCE = False
-user_cache = {}  # Instant RAM cache for zero lag
-
 bot = telebot.TeleBot(BOT_TOKEN)
 
 last_purchase_time = {}
@@ -39,12 +37,10 @@ def get_db_connection():
     return psycopg2.connect(SUPABASE_DB_URL, sslmode='require', connect_timeout=3)
 
 def init_db():
-    """Safe initialization: Creates tables if missing, and safely injects new columns without wiping existing data or balances."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # 1. Users Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -62,12 +58,10 @@ def init_db():
                 bonus_spins INTEGER DEFAULT 0
             )
         ''')
-        # Safe column migrations for older tables
         cursor.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_spins INTEGER DEFAULT 0;')
         cursor.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referrals INTEGER DEFAULT 0;')
         cursor.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_spin_time TEXT;')
 
-        # 2. Orders Table (Preserves all past purchase histories)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 id SERIAL PRIMARY KEY,
@@ -79,7 +73,6 @@ def init_db():
             )
         ''')
 
-        # 3. Bot Transactions Ledger
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS bot_transactions (
                 id SERIAL PRIMARY KEY,
@@ -91,7 +84,6 @@ def init_db():
             )
         ''')
 
-        # 4. Support Tickets Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS support_tickets (
                 id SERIAL PRIMARY KEY,
@@ -103,7 +95,6 @@ def init_db():
             )
         ''')
 
-        # 5. Coupons Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS coupons (
                 code TEXT PRIMARY KEY,
@@ -116,7 +107,6 @@ def init_db():
             )
         ''')
 
-        # 6. Coupon Redemptions Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS coupon_redemptions (
                 user_id BIGINT,
@@ -126,7 +116,6 @@ def init_db():
             )
         ''')
 
-        # 7. Spam Tracker Table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS spam_tracker (
                 user_id BIGINT PRIMARY KEY,
@@ -138,7 +127,7 @@ def init_db():
         conn.commit()
         cursor.close()
         conn.close()
-        print("Database initialized successfully with 100% data preservation safety.")
+        print("Database initialized safely with live DB queries (No RAM Cache).")
     except Exception as e:
         print(f"DB Init Error: {e}")
 
@@ -160,9 +149,7 @@ def log_bot_transaction(user_id, tx_type, amount, details):
         print(f"Error logging bot transaction: {e}")
 
 def get_user(user_id):
-    if user_id in user_cache:
-        return user_cache[user_id]
-        
+    """Directly queries Supabase every time to guarantee 100% accurate live balances."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -171,7 +158,7 @@ def get_user(user_id):
         cursor.close()
         conn.close()
         if row:
-            user_data = {
+            return {
                 "user_id": row["user_id"],
                 "name": row["name"],
                 "phone": row["phone"],
@@ -186,14 +173,12 @@ def get_user(user_id):
                 "last_spin_time": row["last_spin_time"],
                 "bonus_spins": int(row["bonus_spins"] or 0)
             }
-            user_cache[user_id] = user_data
-            return user_data
     except Exception as e:
         print(f"Error fetching user: {e}")
     return None
 
 def save_user(user_data):
-    user_cache[user_data["user_id"]] = user_data
+    """Writes directly to Supabase immediately without relying on cache."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -967,7 +952,7 @@ def handle_callback(call):
 
     elif call.data.startswith("adm_coupon_type_") and is_admin:
         bot.answer_callback_query(call.id)
-        r_type = call.data.split("_")[3] # balance, discount, spin
+        r_type = call.data.split("_")[3]
         if user_id in admin_coupon_flow:
             admin_coupon_flow[user_id]["type"] = r_type
             admin_coupon_flow[user_id]["step"] = "value"
@@ -1070,6 +1055,7 @@ def handle_callback(call):
             bot.send_message(call.message.chat.id, "💬 Send the target User ID:")
 
 def execute_purchase(call, user_id, product_id, duration_text, price_inr, product_name):
+    # Fetch live user data directly from DB
     user = get_user(user_id)
     if user and user["banned"]:
         return
@@ -1213,8 +1199,8 @@ def create_topup_order(message_obj, user_id, amount_inr):
 
             def poll_payment_status(u_id, target_order_id, target_amount, msg_id):
                 headers_verify = {"Authorization": f"Bearer {FAMPAY_API_KEY}"}
-                for _ in range(60):
-                    time.sleep(5)
+                for _ in range(150):
+                    time.sleep(2)
                     if u_id not in user_orders or user_orders[u_id]["order_id"] != target_order_id:
                         break
                     
@@ -1576,5 +1562,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Ultimate Store Bot running with 100% Data Preservation, Automated Payments, and Interactive Coupon Generator!")
+print("Ultimate Store Bot running live with Direct Supabase DB Queries (Zero Cache Risk)!")
 bot.infinity_polling()
