@@ -610,7 +610,6 @@ def handle_callback(call):
         order_id = order_info["order_id"]
         amount_inr = order_info["amount"]
         
-        # Check if expired (5 minutes)
         if datetime.now() > order_info["expires_at"]:
             try:
                 bot.delete_message(call.message.chat.id, order_info["msg_id"])
@@ -646,7 +645,6 @@ def handle_callback(call):
                 )
                 bot.send_message(call.message.chat.id, success_text, parse_mode="Markdown")
             else:
-                # If retry_count is 0, give them 1 more chance with "Try Again". If retry_count is 1, final fail message!
                 if order_info.get("retry_count", 0) == 0:
                     order_info["retry_count"] = 1
                     pending_text = (
@@ -666,7 +664,6 @@ def handle_callback(call):
                         markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
                     bot.send_message(call.message.chat.id, pending_text, parse_mode="Markdown", reply_markup=markup)
                 else:
-                    # Final Failure after Try Again
                     try:
                         bot.delete_message(call.message.chat.id, order_info["msg_id"])
                     except Exception:
@@ -777,10 +774,12 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("📋 Users Started List", callback_data="adm_users_list"))
+        markup.add(telebot.types.InlineKeyboardButton("🔍 Check User Balance & Info", callback_data="adm_check_user"))
+        markup.add(telebot.types.InlineKeyboardButton("💰 Add Balance to User", callback_data="adm_addbal_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("✂️ Cut Balance from User", callback_data="adm_cutbal_menu"))
         markup.add(telebot.types.InlineKeyboardButton("📢 Broadcast Announcement", callback_data="adm_broadcast"))
         markup.add(telebot.types.InlineKeyboardButton("🤝 Toggle Reseller Role", callback_data="adm_toggle_reseller"))
         markup.add(telebot.types.InlineKeyboardButton("🔨 Ban / Unban User", callback_data="adm_ban_menu"))
-        markup.add(telebot.types.InlineKeyboardButton("💰 Add Balance to User", callback_data="adm_addbal_menu"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.edit_message_text("👑 **MASTER ADMIN PANEL**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
@@ -804,93 +803,102 @@ def handle_callback(call):
         admin_actions[user_id] = "broadcast"
         bot.send_message(call.message.chat.id, "📢 **Send the announcement message you want to broadcast to all users:**", parse_mode="Markdown")
 
-    elif call.data in ["adm_toggle_reseller", "adm_ban_menu", "adm_addbal_menu"] and is_admin:
+    elif call.data in ["adm_toggle_reseller", "adm_ban_menu", "adm_addbal_menu", "adm_cutbal_menu", "adm_check_user"] and is_admin:
         bot.answer_callback_query(call.id)
-        actions = {"adm_toggle_reseller": "reseller", "adm_ban_menu": "ban", "adm_addbal_menu": "addbal"}
+        actions = {
+            "adm_toggle_reseller": "reseller", 
+            "adm_ban_menu": "ban", 
+            "adm_addbal_menu": "addbal",
+            "adm_cutbal_menu": "cutbal",
+            "adm_check_user": "checkuser"
+        }
         admin_actions[user_id] = actions[call.data]
-        bot.send_message(call.message.chat.id, "💬 Send the target User ID (and Amount if adding balance):")
+        if call.data == "adm_check_user":
+            bot.send_message(call.message.chat.id, "💬 Send the target User ID to view balance and profile:")
+        elif call.data == "adm_addbal_menu":
+            bot.send_message(call.message.chat.id, "💬 Send target User ID and Amount to add. Example: `6444009163 100`")
+        elif call.data == "adm_cutbal_menu":
+            bot.send_message(call.message.chat.id, "💬 Send target User ID and Amount to cut. Example: `6444009163 50`")
+        else:
+            bot.send_message(call.message.chat.id, "💬 Send the target User ID:")
 
 def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, product_name):
-    balance = user["balance"]
-    if balance >= price_inr:
-        proc_msg = bot.send_message(call.message.chat.id, f"⏳ Contacting Reseller Server for {product_name}...")
-        
-        user["balance"] -= price_inr
-        user["orders_count"] += 1
-        user["total_spent"] += price_inr
-        save_user(user)
-        
-        payload = {
-            'api_key': XYZ_API_KEY,
-            'action': 'buy',
-            'product_id': product_id,
-            'duration': duration_text
-        }
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'x-master-key': XYZ_MASTER_KEY
-        }
-        
-        try:
-            api_res = requests.post(XYZ_API_URL, data=payload, headers=headers, timeout=15)
-            raw_response = api_res.text.strip()
-            
-            license_key = None
-            try:
-                res_json = api_res.json()
-                license_key = res_json.get("key") or res_json.get("license") or res_json.get("message") or res_json.get("data")
-            except Exception:
-                if raw_response and "error" not in raw_response.lower() and "html" not in raw_response.lower():
-                    license_key = raw_response
-
-            try:
-                bot.delete_message(call.message.chat.id, proc_msg.message_id)
-            except Exception:
-                pass
-
-            if license_key and "error" not in str(license_key).lower():
-                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)',
-                    (user_id, duration_text, str(license_key), price_inr, current_time)
-                )
-                conn.commit()
-                cursor.close()
-                conn.close()
-                
-                bot.send_message(
-                    call.message.chat.id,
-                    f"🎉 **{product_name} Key Generated!**\n\n🔑 Key:\n`{license_key}`\n\n⏱️ Duration: {duration_text}\n💰 Cost: ₹{price_inr}\n💳 Remaining Balance: ₹{user['balance']:.2f}",
-                    parse_mode="Markdown"
-                )
-            else:
-                user["balance"] += price_inr
-                user["orders_count"] -= 1
-                user["total_spent"] -= price_inr
-                save_user(user)
-                bot.send_message(call.message.chat.id, f"❌ **API Error / Refunded**\nServer response: `{raw_response[:300]}`", parse_mode="Markdown")
-        except Exception as e:
-            try:
-                bot.delete_message(call.message.chat.id, proc_msg.message_id)
-            except Exception:
-                pass
-            user["balance"] += price_inr
-            user["orders_count"] -= 1
-            user["total_spent"] -= price_inr
-            save_user(user)
-            bot.send_message(call.message.chat.id, f"⚠️ Connection Exception, balance refunded: {str(e)}")
-    else:
+    # Secure atomic balance deduction check
+    fresh_user = get_user(user_id)
+    if not fresh_user or fresh_user["balance"] < price_inr:
+        current_bal = fresh_user["balance"] if fresh_user else 0.0
         bot.send_message(
             call.message.chat.id,
-            f"❌ **Insufficient Balance!**\nRequired: ₹{price_inr} | Balance: ₹{balance:.2f}\n\nPlease add balance to your wallet.",
+            f"❌ **Insufficient Balance!**\nRequired: ₹{price_inr} | Balance: ₹{current_bal:.2f}\n\nPlease add balance to your wallet.",
             parse_mode="Markdown",
             reply_markup=telebot.types.InlineKeyboardMarkup().add(
                 telebot.types.InlineKeyboardButton("💳 Add Balance Now", callback_data="add_balance"),
                 telebot.types.InlineKeyboardButton("🔙 Back to Shop", callback_data="all_products")
             )
         )
+        return
+
+    proc_msg = bot.send_message(call.message.chat.id, f"⏳ Contacting Reseller Server for {product_name}...")
+    
+    payload = {
+        'api_key': XYZ_API_KEY,
+        'action': 'buy',
+        'product_id': product_id,
+        'duration': duration_text
+    }
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-master-key': XYZ_MASTER_KEY
+    }
+    
+    try:
+        api_res = requests.post(XYZ_API_URL, data=payload, headers=headers, timeout=15)
+        raw_response = api_res.text.strip()
+        
+        license_key = None
+        try:
+            res_json = api_res.json()
+            license_key = res_json.get("key") or res_json.get("license") or res_json.get("message") or res_json.get("data")
+        except Exception:
+            if raw_response and "error" not in raw_response.lower() and "html" not in raw_response.lower():
+                license_key = raw_response
+
+        try:
+            bot.delete_message(call.message.chat.id, proc_msg.message_id)
+        except Exception:
+            pass
+
+        if license_key and "error" not in str(license_key).lower():
+            # Deduct balance securely only after successful API key generation
+            fresh_user["balance"] -= price_inr
+            fresh_user["orders_count"] += 1
+            fresh_user["total_spent"] += price_inr
+            save_user(fresh_user)
+
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)',
+                (user_id, duration_text, str(license_key), price_inr, current_time)
+            )
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            bot.send_message(
+                call.message.chat.id,
+                f"🎉 **{product_name} Key Generated!**\n\n🔑 Key:\n`{license_key}`\n\n⏱️ Duration: {duration_text}\n💰 Cost: ₹{price_inr}\n💳 Remaining Balance: ₹{fresh_user['balance']:.2f}",
+                parse_mode="Markdown"
+            )
+        else:
+            bot.send_message(call.message.chat.id, f"❌ **API Error / Purchase Failed**\nServer response: `{raw_response[:300]}`", parse_mode="Markdown")
+    except Exception as e:
+        try:
+            bot.delete_message(call.message.chat.id, proc_msg.message_id)
+        except Exception:
+            pass
+        bot.send_message(call.message.chat.id, f"⚠️ Connection Exception: {str(e)}")
 
 def create_topup_order(message_obj, user_id, amount_inr):
     amount_paise = amount_inr * 100
@@ -1015,6 +1023,27 @@ def admin_input(message):
                 bot.send_message(message.chat.id, "❌ User not found.")
         except Exception:
             bot.send_message(message.chat.id, "❌ Invalid ID.")
+    elif action == "checkuser":
+        try:
+            target_id = int(text)
+            target = get_user(target_id)
+            if target:
+                info_text = (
+                    f"👤 **USER INFO FOUND**\n\n"
+                    f"🆔 ID: `{target['user_id']}`\n"
+                    f"🔥 Name: {target['name']}\n"
+                    f"📞 Phone: {target.get('phone', 'N/A')}\n"
+                    f"👑 Role: {target['role']}\n"
+                    f"💳 **Balance: ₹{target['balance']:.2f}**\n"
+                    f"💸 Total Spent: ₹{target['total_spent']:.2f}\n"
+                    f"📦 Orders: {target['orders_count']}\n"
+                    f"📅 Joined: {target['joined']}"
+                )
+                bot.send_message(message.chat.id, info_text, parse_mode="Markdown")
+            else:
+                bot.send_message(message.chat.id, "❌ User not found in database.")
+        except Exception:
+            bot.send_message(message.chat.id, "❌ Invalid ID format.")
     elif action == "addbal":
         try:
             parts = text.split()
@@ -1024,10 +1053,31 @@ def admin_input(message):
                 target["balance"] += amount
                 save_user(target)
                 bot.send_message(message.chat.id, f"✅ Added ₹{amount} to `{target_id}`. New Balance: ₹{target['balance']:.2f}", parse_mode="Markdown")
+                try:
+                    bot.send_message(target_id, f"💳 **ADMIN ADDED BALANCE**\n\nAdded: `₹{amount:.2f}`\nNew Balance: `₹{target['balance']:.2f}`", parse_mode="Markdown")
+                except Exception:
+                    pass
             else:
                 bot.send_message(message.chat.id, "❌ User not found.")
         except Exception:
-            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
+            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT` (e.g., `6444009163 100`)", parse_mode="Markdown")
+    elif action == "cutbal":
+        try:
+            parts = text.split()
+            target_id, amount = int(parts[0]), float(parts[1])
+            target = get_user(target_id)
+            if target:
+                target["balance"] = max(0.0, target["balance"] - amount)
+                save_user(target)
+                bot.send_message(message.chat.id, f"✅ Cut ₹{amount} from `{target_id}`. New Balance: ₹{target['balance']:.2f}", parse_mode="Markdown")
+                try:
+                    bot.send_message(target_id, f"💳 **ADMIN DEDUCTED BALANCE**\n\nDeducted: `₹{amount:.2f}`\nNew Balance: `₹{target['balance']:.2f}`", parse_mode="Markdown")
+                except Exception:
+                    pass
+            else:
+                bot.send_message(message.chat.id, "❌ User not found.")
+        except Exception:
+            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT` (e.g., `6444009163 50`)", parse_mode="Markdown")
 
-print("Candid Store Bot is running with the two-step payment retry mechanism!")
+print("Candid Store Bot is running securely with full admin balance controls!")
 bot.infinity_polling()
