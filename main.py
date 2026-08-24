@@ -23,14 +23,15 @@ SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- CLOUD DATABASE SETUP ---
+# In-memory cache to make button responses instant (0 sec delay)
+user_cache = {}
+
 def get_db_connection():
     return psycopg2.connect(SUPABASE_DB_URL, sslmode='require', connect_timeout=5)
 
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -70,13 +71,16 @@ def init_db():
 init_db()
 
 def get_user(user_id):
+    if user_id in user_cache:
+        return user_cache[user_id]
+        
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
         cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
         row = cursor.fetchone()
         if row:
-            return {
+            user_data = {
                 "user_id": row["user_id"],
                 "name": row["name"],
                 "phone": row["phone"],
@@ -89,6 +93,8 @@ def get_user(user_id):
                 "verified": bool(row["verified"]),
                 "total_referrals": int(row["total_referrals"] or 0)
             }
+            user_cache[user_id] = user_data
+            return user_data
     except Exception as e:
         print(f"Error fetching user: {e}")
     finally:
@@ -97,6 +103,7 @@ def get_user(user_id):
     return None
 
 def save_user(user_data):
+    user_cache[user_data["user_id"]] = user_data
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -694,5 +701,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Candid Store Bot is running lightning-fast with Supabase pooler!")
+print("Candid Store Bot is running with instant cache speed!")
 bot.infinity_polling()
