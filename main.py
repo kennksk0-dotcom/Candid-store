@@ -273,6 +273,11 @@ def get_price(retail_price, panel_price, is_reseller):
         return panel_price + 1
     return retail_price
 
+def get_custom_price(panel_price, is_reseller):
+    if is_reseller:
+        return panel_price + 2
+    return panel_price * 2
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -404,6 +409,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         catalog_text = "🛍️ **— STORE CATALOG —** 🛍️\n\nSelect a product category below:"
         markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("🛒 Aim Hack FF Nonroot", callback_data="buy_aim_hack"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 Bala Mod Config FF", callback_data="buy_config"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 Bala Mod V2 FF", callback_data="buy_v2"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 BR Mod PC Version", callback_data="buy_br_pc"))
@@ -423,6 +429,19 @@ def handle_callback(call):
         execute_purchase(call, user_id, product_id="guest_account", duration_text="1 Account", price_inr=get_price(15, 10, is_res), product_name="Guest ID 9 Level Account")
 
     # --- CATEGORY MENUS ---
+    elif call.data == "buy_aim_hack":
+        bot.answer_callback_query(call.id)
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton(f"1 Hours — ₹{get_custom_price(10, is_res)}", callback_data="aim_1h"))
+        markup.add(telebot.types.InlineKeyboardButton(f"3 Hours — ₹{get_custom_price(20, is_res)}", callback_data="aim_3h"))
+        markup.add(telebot.types.InlineKeyboardButton(f"6 Hours — ₹{get_custom_price(35, is_res)}", callback_data="aim_6h"))
+        markup.add(telebot.types.InlineKeyboardButton(f"12 Hours — ₹{get_custom_price(50, is_res)}", callback_data="aim_12h"))
+        markup.add(telebot.types.InlineKeyboardButton(f"1 Day — ₹{get_custom_price(70, is_res)}", callback_data="aim_1d"))
+        markup.add(telebot.types.InlineKeyboardButton(f"7 Days — ₹{get_custom_price(261, is_res)}", callback_data="aim_7d"))
+        markup.add(telebot.types.InlineKeyboardButton(f"30 Days — ₹{get_custom_price(680, is_res)}", callback_data="aim_30d"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("🛍️ **AIM HACK FF NONROOT**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
     elif call.data == "buy_config":
         bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
@@ -552,6 +571,20 @@ def handle_callback(call):
         bot.edit_message_text("🛍️ **SILENT CHEAT FF ROOT ANDROID**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     # --- PURCHASE EXECUTIONS ---
+    elif call.data.startswith("aim_"):
+        bot.answer_callback_query(call.id, text="Processing order...")
+        aim_map = {
+            "aim_1h": ("1 Hours", get_custom_price(10, is_res)),
+            "aim_3h": ("3 Hours", get_custom_price(20, is_res)),
+            "aim_6h": ("6 Hours", get_custom_price(35, is_res)),
+            "aim_12h": ("12 Hours", get_custom_price(50, is_res)),
+            "aim_1d": ("1 Day", get_custom_price(70, is_res)),
+            "aim_7d": ("7 Days", get_custom_price(261, is_res)),
+            "aim_30d": ("30 Days", get_custom_price(680, is_res))
+        }
+        d_text, price = aim_map[call.data]
+        execute_purchase(call, user_id, "133", d_text, price, "Aim Hack FF Nonroot")
+
     elif call.data.startswith("cfg_"):
         bot.answer_callback_query(call.id, text="Processing order...")
         cfg_map = {
