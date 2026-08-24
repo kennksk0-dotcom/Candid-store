@@ -631,7 +631,6 @@ def handle_callback(call):
                 user["balance"] += amount_inr
                 save_user(user)
                 
-                # Delete QR message upon success
                 try:
                     bot.delete_message(call.message.chat.id, order_info["msg_id"])
                 except Exception:
@@ -647,30 +646,63 @@ def handle_callback(call):
                 )
                 bot.send_message(call.message.chat.id, success_text, parse_mode="Markdown")
             else:
-                pending_text = (
-                    "⏳ **PAYMENT NOT RECEIVED** ⏳\n\n"
-                    "We have not detected your payment yet. Please ensure the transaction has been completed successfully via your UPI application.\n\n"
-                    "💬 If payment was debited from your account, please DM the administrator for assistance."
-                )
-                markup = telebot.types.InlineKeyboardMarkup()
-                markup.add(telebot.types.InlineKeyboardButton("🔄 Try Again", callback_data="check_topup"))
-                admin_username = ""
-                try:
-                    admin_chat = bot.get_chat(ADMIN_ID)
-                    admin_username = admin_chat.username if admin_chat.username else ""
-                except Exception:
-                    pass
-                if admin_username:
-                    markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
-                bot.send_message(call.message.chat.id, pending_text, parse_mode="Markdown", reply_markup=markup)
+                # If retry_count is 0, give them 1 more chance with "Try Again". If retry_count is 1, final fail message!
+                if order_info.get("retry_count", 0) == 0:
+                    order_info["retry_count"] = 1
+                    pending_text = (
+                        "⏳ **PAYMENT NOT RECEIVED** ⏳\n\n"
+                        "We have not detected your payment yet. Please ensure the transaction has been completed successfully via your UPI application.\n\n"
+                        "💬 If payment was debited from your account, click try again or contact administration."
+                    )
+                    markup = telebot.types.InlineKeyboardMarkup()
+                    markup.add(telebot.types.InlineKeyboardButton("🔄 Try Again", callback_data="check_topup"))
+                    admin_username = ""
+                    try:
+                        admin_chat = bot.get_chat(ADMIN_ID)
+                        admin_username = admin_chat.username if admin_chat.username else ""
+                    except Exception:
+                        pass
+                    if admin_username:
+                        markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
+                    bot.send_message(call.message.chat.id, pending_text, parse_mode="Markdown", reply_markup=markup)
+                else:
+                    # Final Failure after Try Again
+                    try:
+                        bot.delete_message(call.message.chat.id, order_info["msg_id"])
+                    except Exception:
+                        pass
+                    del user_orders[user_id]
+
+                    failed_text = (
+                        "❌ **PAYMENT UNSUCCESSFUL** ❌\n\n"
+                        "We were unable to verify your payment transaction after multiple attempts.\n\n"
+                        "💬 If your funds were deducted, please contact administration immediately with your payment screenshot."
+                    )
+                    markup = telebot.types.InlineKeyboardMarkup()
+                    admin_username = ""
+                    try:
+                        admin_chat = bot.get_chat(ADMIN_ID)
+                        admin_username = admin_chat.username if admin_chat.username else ""
+                    except Exception:
+                        pass
+                    if admin_username:
+                        markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
+                    bot.send_message(call.message.chat.id, failed_text, parse_mode="Markdown", reply_markup=markup)
+
         except Exception:
             error_text = (
                 "⚠️ **VERIFICATION ERROR** ⚠️\n\n"
-                "We encountered a temporary network issue while verifying your transaction. Please try again or contact administration if the issue persists."
+                "We encountered a temporary network issue while verifying your transaction. Please contact administration if the issue persists."
             )
-            markup = telebot.types.InlineKeyboardMarkup().add(
-                telebot.types.InlineKeyboardButton("🔄 Try Again", callback_data="check_topup")
-            )
+            markup = telebot.types.InlineKeyboardMarkup()
+            admin_username = ""
+            try:
+                admin_chat = bot.get_chat(ADMIN_ID)
+                admin_username = admin_chat.username if admin_chat.username else ""
+            except Exception:
+                pass
+            if admin_username:
+                markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
             bot.send_message(call.message.chat.id, error_text, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "profile":
@@ -894,7 +926,8 @@ def create_topup_order(message_obj, user_id, amount_inr):
                 "order_id": order_id, 
                 "amount": amount_inr, 
                 "expires_at": expires_at,
-                "msg_id": sent_msg.message_id
+                "msg_id": sent_msg.message_id,
+                "retry_count": 0
             }
 
             def expire_order(u_id, target_msg_id, target_order_id):
@@ -996,5 +1029,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Candid Store Bot is running with professional payment notification and single try-again logic!")
+print("Candid Store Bot is running with the two-step payment retry mechanism!")
 bot.infinity_polling()
