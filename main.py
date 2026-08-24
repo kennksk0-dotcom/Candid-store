@@ -23,7 +23,7 @@ SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# In-memory cache to make button responses instant (0 sec delay)
+# In-memory cache for instant responses
 user_cache = {}
 
 def get_db_connection():
@@ -497,6 +497,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("📋 Users Started List", callback_data="adm_users_list"))
+        markup.add(telebot.types.InlineKeyboardButton("📢 Broadcast Announcement", callback_data="adm_broadcast"))
         markup.add(telebot.types.InlineKeyboardButton("🤝 Toggle Reseller Role", callback_data="adm_toggle_reseller"))
         markup.add(telebot.types.InlineKeyboardButton("🔨 Ban / Unban User", callback_data="adm_ban_menu"))
         markup.add(telebot.types.InlineKeyboardButton("💰 Add Balance to User", callback_data="adm_addbal_menu"))
@@ -517,6 +518,11 @@ def handle_callback(call):
             text += f"🆔 `{r[0]}` | {r[1]} | 📱 {r[2]} | Role: {r[3]} | 📅 {r[4]}\n\n"
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
         bot.edit_message_text(text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "adm_broadcast" and is_admin:
+        bot.answer_callback_query(call.id)
+        admin_actions[user_id] = "broadcast"
+        bot.send_message(call.message.chat.id, "📢 **Send the announcement message you want to broadcast to all users:**\n_(You can use markdown formatting)_", parse_mode="Markdown")
 
     elif call.data in ["adm_toggle_reseller", "adm_ban_menu", "adm_addbal_menu"] and is_admin:
         bot.answer_callback_query(call.id)
@@ -662,7 +668,27 @@ def admin_input(message):
     action = admin_actions.pop(admin_id)
     text = message.text.strip()
     
-    if action == "reseller":
+    if action == "broadcast":
+        status_msg = bot.send_message(message.chat.id, "⏳ Sending broadcast to all users...")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id FROM users')
+        all_users = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        success_count = 0
+        fail_count = 0
+        for u in all_users:
+            try:
+                bot.send_message(u[0], f"📢 **ANNOUNCEMENT**\n\n{text}", parse_mode="Markdown")
+                success_count += 1
+            except Exception:
+                fail_count += 1
+                
+        bot.edit_message_text(f"✅ **Broadcast Completed!**\n\n📤 Successfully sent: {success_count}\n❌ Failed (Blocked bot): {fail_count}", message.chat.id, status_msg.message_id, parse_mode="Markdown")
+
+    elif action == "reseller":
         try:
             target_id = int(text)
             target = get_user(target_id)
@@ -701,5 +727,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Candid Store Bot is running with instant cache speed!")
+print("Candid Store Bot is running with Broadcast feature!")
 bot.infinity_polling()
