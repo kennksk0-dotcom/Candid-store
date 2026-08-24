@@ -94,9 +94,6 @@ def log_bot_transaction(user_id, tx_type, amount, details):
         print(f"Error logging bot transaction: {e}")
 
 def get_user(user_id):
-    if user_id in user_cache:
-        return user_cache[user_id]
-        
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
@@ -328,7 +325,7 @@ def handle_callback(call):
 
     elif call.data == "buy_guest_account":
         bot.answer_callback_query(call.id, text="Processing order...")
-        execute_purchase(call, user_id, user, product_id="guest_account", duration_text="1 Account", price_inr=get_price(15, 10, is_res), product_name="Guest ID 9 Level Account")
+        execute_purchase(call, user_id, product_id="guest_account", duration_text="1 Account", price_inr=get_price(15, 10, is_res), product_name="Guest ID 9 Level Account")
 
     # --- CATEGORY MENUS ---
     elif call.data == "buy_config":
@@ -470,7 +467,7 @@ def handle_callback(call):
             "cfg_24h": ("24 Hours", get_price(320, 240, is_res))
         }
         d_text, price = cfg_map[call.data]
-        execute_purchase(call, user_id, user, "142", d_text, price, "Bala Mod Config")
+        execute_purchase(call, user_id, "142", d_text, price, "Bala Mod Config")
 
     elif call.data.startswith("v2_"):
         bot.answer_callback_query(call.id, text="Processing order...")
@@ -486,7 +483,7 @@ def handle_callback(call):
             "v2_7d": ("7 DayS", get_price(2240, 1680, is_res))
         }
         d_text, price = v2_map[call.data]
-        execute_purchase(call, user_id, user, "136", d_text, price, "Bala Mod V2")
+        execute_purchase(call, user_id, "136", d_text, price, "Bala Mod V2")
 
     elif call.data.startswith("br_") and not call.data.startswith("br_root_"):
         bot.answer_callback_query(call.id, text="Processing order...")
@@ -500,7 +497,7 @@ def handle_callback(call):
             "br_30d_silent": ("30 Days Pc Aim Silent", get_price(599, 499, is_res))
         }
         d_text, price = br_map[call.data]
-        execute_purchase(call, user_id, user, "49", d_text, price, "BR Mod PC")
+        execute_purchase(call, user_id, "49", d_text, price, "BR Mod PC")
 
     elif call.data.startswith("br_root_"):
         bot.answer_callback_query(call.id, text="Processing order...")
@@ -511,7 +508,7 @@ def handle_callback(call):
             "br_root_30d": ("30 DaYs", get_price(535, 400, is_res))
         }
         d_text, price = root_map[call.data]
-        execute_purchase(call, user_id, user, "67", d_text, price, "BR Mod Root Android")
+        execute_purchase(call, user_id, "67", d_text, price, "BR Mod Root Android")
 
     elif call.data.startswith("drip_"):
         bot.answer_callback_query(call.id, text="Processing order...")
@@ -523,7 +520,7 @@ def handle_callback(call):
             "drip_30d": ("30 DaYS NONROOT", get_price(550, 300, is_res))
         }
         d_text, price = drip_map[call.data]
-        execute_purchase(call, user_id, user, "62", d_text, price, "DripClient Nonroot")
+        execute_purchase(call, user_id, "62", d_text, price, "DripClient Nonroot")
 
     elif call.data.startswith("haxx_"):
         bot.answer_callback_query(call.id, text="Processing order...")
@@ -533,7 +530,7 @@ def handle_callback(call):
             "haxx_30d": ("30 DaYs [HAXXCKERPRO API]", get_price(1250, 1050, is_res))
         }
         d_text, price = haxx_map[call.data]
-        execute_purchase(call, user_id, user, "64", d_text, price, "Haxx-Cker Pro Root")
+        execute_purchase(call, user_id, "64", d_text, price, "Haxx-Cker Pro Root")
 
     elif call.data.startswith("mig_"):
         bot.answer_callback_query(call.id, text="Processing order...")
@@ -546,7 +543,7 @@ def handle_callback(call):
             "mig_30d_p": ("30 DaYs PRO", get_price(1300, 1000, is_res))
         }
         d_text, price = mig_map[call.data]
-        execute_purchase(call, user_id, user, "69", d_text, price, "Migul iPhone iOS")
+        execute_purchase(call, user_id, "69", d_text, price, "Migul iPhone iOS")
 
     elif call.data.startswith("pato_"):
         bot.answer_callback_query(call.id, text="Processing order...")
@@ -557,7 +554,7 @@ def handle_callback(call):
             "pato_30d": ("30 DaYs All Colours Mix", get_price(720, 469, is_res))
         }
         d_text, price = pato_map[call.data]
-        execute_purchase(call, user_id, user, "54", d_text, price, "Pato Team Android")
+        execute_purchase(call, user_id, "54", d_text, price, "Pato Team Android")
 
     elif call.data.startswith("prime_"):
         bot.answer_callback_query(call.id, text="Processing order...")
@@ -568,7 +565,7 @@ def handle_callback(call):
             "prime_10d": ("10 Days Nonroot", get_price(379, 300, is_res))
         }
         d_text, price = prime_map[call.data]
-        execute_purchase(call, user_id, user, "48", d_text, price, "Prime Hook Nonroot")
+        execute_purchase(call, user_id, "48", d_text, price, "Prime Hook Nonroot")
 
     elif call.data.startswith("sil_nr_"):
         bot.answer_callback_query(call.id, text="Processing order...")
@@ -580,7 +577,7 @@ def handle_callback(call):
             "sil_nr_28d": ("28 DaYs", get_price(800, 519, is_res))
         }
         d_text, price = sil_nr_map[call.data]
-        execute_purchase(call, user_id, user, "127", d_text, price, "Silent Cheat Nonroot")
+        execute_purchase(call, user_id, "127", d_text, price, "Silent Cheat Nonroot")
 
     elif call.data.startswith("sil_r_"):
         bot.answer_callback_query(call.id, text="Processing order...")
@@ -597,7 +594,7 @@ def handle_callback(call):
             "sil_r_28d_brut": ("28 DaYs BRUTAL", get_price(800, 519, is_res))
         }
         d_text, price = sil_r_map[call.data]
-        execute_purchase(call, user_id, user, "128", d_text, price, "Silent Cheat Root")
+        execute_purchase(call, user_id, "128", d_text, price, "Silent Cheat Root")
 
     # --- WALLET & UTILITIES ---
     elif call.data == "add_balance":
@@ -654,7 +651,6 @@ def handle_callback(call):
                 user["balance"] += amount_inr
                 save_user(user)
                 
-                # Log global transaction
                 log_bot_transaction(user_id, "TOPUP", amount_inr, f"FamPay UPI Topup ID: {order_id}")
                 
                 try:
@@ -731,19 +727,20 @@ def handle_callback(call):
 
     elif call.data == "profile":
         bot.answer_callback_query(call.id)
+        fresh_user = get_user(user_id)
         role_display = "👑 Master Admin" if is_admin else f"👤 {user_role}"
         profile_text = (
             f"👤 **— YOUR PROFILE —** 👤\n\n"
             f"🆔 **User ID:** `{user_id}`\n"
-            f"🔥 **Name:** {user['name']}\n"
+            f"🔥 **Name:** {fresh_user['name']}\n"
             f"👑 **Account:** {role_display}\n\n"
             f"💰 **— Balance —** 💰\n"
-            f"💳 **Current:** ₹{user['balance']:.2f}\n\n"
+            f"💳 **Current:** ₹{fresh_user['balance']:.2f}\n\n"
             f"📊 **— Statistics —** 📊\n"
-            f"📦 **Orders:** {user['orders_count']}\n"
-            f"💸 **Spent:** ₹{user['total_spent']:.2f}\n"
-            f"👥 **Referrals:** {user.get('total_referrals', 0)}\n\n"
-            f"📅 **Joined:** {user['joined']}"
+            f"📦 **Orders:** {fresh_user['orders_count']}\n"
+            f"💸 **Spent:** ₹{fresh_user['total_spent']:.2f}\n"
+            f"👥 **Referrals:** {fresh_user.get('total_referrals', 0)}\n\n"
+            f"📅 **Joined:** {fresh_user['joined']}"
         )
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.edit_message_text(profile_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
@@ -869,7 +866,8 @@ def handle_callback(call):
         else:
             bot.send_message(call.message.chat.id, "💬 Send the target User ID:")
 
-def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, product_name):
+def execute_purchase(call, user_id, product_id, duration_text, price_inr, product_name):
+    # Fetch live database user record
     fresh_user = get_user(user_id)
     if not fresh_user or fresh_user["balance"] < price_inr:
         current_bal = fresh_user["balance"] if fresh_user else 0.0
@@ -883,6 +881,12 @@ def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, 
             )
         )
         return
+
+    # STEP 1: Deduct balance BEFORE contacting reseller server to secure funds
+    fresh_user["balance"] -= price_inr
+    fresh_user["orders_count"] += 1
+    fresh_user["total_spent"] += price_inr
+    save_user(fresh_user)
 
     proc_msg = bot.send_message(call.message.chat.id, f"⏳ Contacting Reseller Server for {product_name}...")
     
@@ -915,11 +919,6 @@ def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, 
             pass
 
         if license_key and "error" not in str(license_key).lower():
-            fresh_user["balance"] -= price_inr
-            fresh_user["orders_count"] += 1
-            fresh_user["total_spent"] += price_inr
-            save_user(fresh_user)
-
             # Log global purchase transaction
             log_bot_transaction(user_id, "PURCHASE", price_inr, f"Bought {product_name} ({duration_text})")
 
@@ -940,13 +939,23 @@ def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, 
                 parse_mode="Markdown"
             )
         else:
-            bot.send_message(call.message.chat.id, f"❌ **API Error / Purchase Failed**\nServer response: `{raw_response[:300]}`", parse_mode="Markdown")
+            # REFUND if API failed
+            fresh_user["balance"] += price_inr
+            fresh_user["orders_count"] -= 1
+            fresh_user["total_spent"] -= price_inr
+            save_user(fresh_user)
+            bot.send_message(call.message.chat.id, f"❌ **API Error / Purchase Failed (Balance Refunded)**\nServer response: `{raw_response[:300]}`", parse_mode="Markdown")
     except Exception as e:
+        # REFUND on exception
         try:
             bot.delete_message(call.message.chat.id, proc_msg.message_id)
         except Exception:
             pass
-        bot.send_message(call.message.chat.id, f"⚠️ Connection Exception: {str(e)}")
+        fresh_user["balance"] += price_inr
+        fresh_user["orders_count"] -= 1
+        fresh_user["total_spent"] -= price_inr
+        save_user(fresh_user)
+        bot.send_message(call.message.chat.id, f"⚠️ Connection Exception, balance refunded: {str(e)}")
 
 def create_topup_order(message_obj, user_id, amount_inr):
     amount_paise = amount_inr * 100
@@ -1109,7 +1118,7 @@ def admin_input(message):
             else:
                 bot.send_message(message.chat.id, "❌ User not found.")
         except Exception:
-            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT` (e.g., `6444009163 100`)", parse_Mode="Markdown")
+            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT` (e.g., `6444009163 100`)", parse_mode="Markdown")
     elif action == "cutbal":
         try:
             parts = text.split()
@@ -1129,5 +1138,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT` (e.g., `6444009163 50`)", parse_mode="Markdown")
 
-print("Candid Store Bot is running with global bot transaction tracking!")
+print("Candid Store Bot is running with atomic balance deduction security!")
 bot.infinity_polling()
