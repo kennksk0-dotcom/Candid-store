@@ -21,8 +21,9 @@ XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
-# --- GLOBAL STATES ---
+# --- GLOBAL STATES & CACHE ---
 STORE_UNDER_MAINTENANCE = False
+user_cache = {}  # Instant RAM cache to eliminate network lag
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -136,7 +137,10 @@ def log_bot_transaction(user_id, tx_type, amount, details):
         print(f"Error logging bot transaction: {e}")
 
 def get_user(user_id):
-    """Direct DB Fetch to prevent any RAM cache desync or restart data loss"""
+    """Lightning-fast RAM cached fetch with automatic DB fallback"""
+    if user_id in user_cache:
+        return user_cache[user_id]
+        
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -145,7 +149,7 @@ def get_user(user_id):
         cursor.close()
         conn.close()
         if row:
-            return {
+            user_data = {
                 "user_id": row["user_id"],
                 "name": row["name"],
                 "phone": row["phone"],
@@ -159,12 +163,15 @@ def get_user(user_id):
                 "total_referrals": int(row["total_referrals"] or 0),
                 "last_spin_time": row["last_spin_time"]
             }
+            user_cache[user_id] = user_data
+            return user_data
     except Exception as e:
         print(f"Error fetching user: {e}")
     return None
 
 def save_user(user_data):
-    """Direct DB Upsert to secure cloud state immediately"""
+    """Updates local cache instantly and syncs to Supabase cloud database"""
+    user_cache[user_data["user_id"]] = user_data
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -354,7 +361,7 @@ def handle_callback(call):
     
     global STORE_UNDER_MAINTENANCE
     maintenance_bypass_actions = [
-        "admin_panel", "adm_users_list", "adm_all_transactions", "adm_check_user", 
+        "admin_panel", "adm_users_list_1", "adm_all_transactions", "adm_check_user", 
         "adm_addbal_menu", "adm_cutbal_menu", "adm_broadcast", "adm_toggle_reseller", 
         "adm_ban_menu", "adm_toggle_maintenance", "adm_view_tickets", "adm_create_coupon",
         "profile", "orders", "referral", "support_ticket", "main_menu"
@@ -795,7 +802,6 @@ def handle_callback(call):
     elif call.data == "check_topup":
         bot.answer_callback_query(call.id, text="Verifying payment...")
         
-        # --- ATOMIC LOCK: Immediately remove order session to prevent double-crediting on spam ---
         if user_id not in user_orders:
             bot.send_message(call.message.chat.id, "❌ No active top-up session or already processed/expired.")
             return
@@ -1501,5 +1507,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Ultimate Store Bot running with Zero-Data-Loss DB persistence, Pagination, and Anti-Double Credit Lock!")
+print("Ultimate Store Bot running instantly with zero lag, cache sync, pagination, and anti-double credit lock!")
 bot.infinity_polling()
