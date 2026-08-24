@@ -4,6 +4,8 @@ import requests
 import psycopg2
 import psycopg2.extras
 from datetime import datetime, timedelta
+import threading
+import time
 
 # --- CONFIGURATION ---
 BOT_TOKEN = "8980753842:AAG05SklWh3TshUWiJio1_MTWo2Net-ijiE"
@@ -585,6 +587,7 @@ def handle_callback(call):
             f"💳 **Current Balance:** ₹{user['balance']:.2f}\n\n"
             "💳 **Available Payment Method:**\n"
             "🇮🇳 Paytm / UPI / QR\n\n"
+            "⏱️ *Note: Generated payment QR codes expire in 5 minutes.*\n\n"
             "✅ **Use balance for instant purchases!**\n\n"
             "👇 **Please reply with the amount in Rupees you want to add (e.g. `100`):**"
         )
@@ -600,19 +603,42 @@ def handle_callback(call):
     elif call.data == "check_topup":
         bot.answer_callback_query(call.id, text="Verifying payment...")
         if user_id not in user_orders:
-            bot.send_message(call.message.chat.id, "❌ No active top-up session.")
+            bot.send_message(call.message.chat.id, "❌ No active top-up session or session expired.")
             return
             
-        order_id = user_orders[user_id]["order_id"]
-        amount_inr = user_orders[user_id]["amount"]
-        headers = {"Authorization": f"Bearer {FAMPAY_API_KEY}"}
+        order_info = user_orders[user_id]
+        order_id = order_info["order_id"]
+        amount_inr = order_info["amount"]
         
+        # Check if expired (5 minutes)
+        if datetime.now() > order_info["expires_at"]:
+            try:
+                bot.delete_message(call.message.chat.id, order_info["msg_id"])
+            except Exception:
+                pass
+            del user_orders[user_id]
+            bot.send_message(
+                call.message.chat.id,
+                f"❌ **Your payment QR code for ₹{amount_inr} has expired.**\n\n💬 DM admin for problems.",
+                parse_mode="Markdown"
+            )
+            return
+
+        headers = {"Authorization": f"Bearer {FAMPAY_API_KEY}"}
         try:
             verify = requests.get(f"{FAMPAY_BASE_URL}/verify/{order_id}", headers=headers).json()
             if verify.get("status") == "success":
                 user["balance"] += amount_inr
                 save_user(user)
+                
+                # Delete QR message upon success
+                try:
+                    bot.delete_message(call.message.chat.id, order_info["msg_id"])
+                except Exception:
+                    pass
+                    
                 del user_orders[user_id]
+                
                 success_text = (
                     "🎉 **PAYMENT SUCCESSFUL!** 🎉\n\n"
                     f"💳 **Added to Wallet:** `₹{amount_inr:.2f}`\n"
@@ -622,19 +648,25 @@ def handle_callback(call):
                 bot.send_message(call.message.chat.id, success_text, parse_mode="Markdown")
             else:
                 pending_text = (
-                    "⏳ **PAYMENT NOT RECEIVED YET** ⏳\n\n"
-                    "We couldn't detect your payment at the moment. Please ensure the transaction is completed in your UPI app.\n\n"
-                    "💡 *Tip: Click 'I Have Paid' again after a few seconds, or contact support if money was debited.*"
+                    "⏳ **PAYMENT NOT RECEIVED** ⏳\n\n"
+                    "We have not detected your payment yet. Please ensure the transaction has been completed successfully via your UPI application.\n\n"
+                    "💬 If payment was debited from your account, please DM the administrator for assistance."
                 )
                 markup = telebot.types.InlineKeyboardMarkup()
                 markup.add(telebot.types.InlineKeyboardButton("🔄 Try Again", callback_data="check_topup"))
-                markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{bot.get_chat(ADMIN_ID).username if hasattr(bot.get_chat(ADMIN_ID), 'username') else 'admin'}"))
+                admin_username = ""
+                try:
+                    admin_chat = bot.get_chat(ADMIN_ID)
+                    admin_username = admin_chat.username if admin_chat.username else ""
+                except Exception:
+                    pass
+                if admin_username:
+                    markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
                 bot.send_message(call.message.chat.id, pending_text, parse_mode="Markdown", reply_markup=markup)
         except Exception:
             error_text = (
                 "⚠️ **VERIFICATION ERROR** ⚠️\n\n"
-                "We encountered a temporary issue while verifying your transaction with the payment gateway.\n\n"
-                "🛠️ Please try clicking **'I Have Paid'** again, or reach out to our administration if the issue persists."
+                "We encountered a temporary network issue while verifying your transaction. Please try again or contact administration if the issue persists."
             )
             markup = telebot.types.InlineKeyboardMarkup().add(
                 telebot.types.InlineKeyboardButton("🔄 Try Again", callback_data="check_topup")
@@ -842,7 +874,8 @@ def create_topup_order(message_obj, user_id, amount_inr):
             order_id = res_data["id"]
             pay_link = res_data["payment_link"]
             qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={requests.utils.quote(pay_link)}"
-            user_orders[user_id] = {"order_id": order_id, "amount": amount_inr}
+            
+            expires_at = datetime.now() + timedelta(minutes=5)
             
             markup = telebot.types.InlineKeyboardMarkup()
             markup.add(telebot.types.InlineKeyboardButton("✅ I Have Paid", callback_data="check_topup"))
@@ -851,10 +884,35 @@ def create_topup_order(message_obj, user_id, amount_inr):
             caption_text = (
                 f"💳 **Top-Up Order:** ₹{amount_inr}\n"
                 f"🆔 ID: `{order_id}`\n\n"
+                f"⏱️ **Expires in:** 5 Minutes\n\n"
                 f"🔗 **Payment Link:**\n`{pay_link}`\n\n"
                 f"Scan the QR code or copy the link into your UPI app, then click **I Have Paid**."
             )
-            bot.send_photo(chat_id, qr_image_url, caption=caption_text, parse_mode="Markdown", reply_markup=markup)
+            sent_msg = bot.send_photo(chat_id, qr_image_url, caption=caption_text, parse_mode="Markdown", reply_markup=markup)
+            
+            user_orders[user_id] = {
+                "order_id": order_id, 
+                "amount": amount_inr, 
+                "expires_at": expires_at,
+                "msg_id": sent_msg.message_id
+            }
+
+            def expire_order(u_id, target_msg_id, target_order_id):
+                time.sleep(300) # 5 minutes
+                if u_id in user_orders and user_orders[u_id]["order_id"] == target_order_id:
+                    del user_orders[u_id]
+                    try:
+                        bot.delete_message(chat_id, target_msg_id)
+                    except Exception:
+                        pass
+                    bot.send_message(
+                        chat_id,
+                        f"❌ **Your payment QR code for ₹{amount_inr} has expired.**\n\n💬 DM admin for problems.",
+                        parse_mode="Markdown"
+                    )
+
+            threading.Thread(target=expire_order, args=(user_id, sent_msg.message_id, order_id), daemon=True).start()
+
         else:
             bot.send_message(chat_id, f"❌ FamAPI Error Response: {res_data}")
     except Exception as e:
@@ -938,5 +996,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Candid Store Bot is running with UPI only payment methods!")
+print("Candid Store Bot is running with professional payment notification and single try-again logic!")
 bot.infinity_polling()
