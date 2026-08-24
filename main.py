@@ -56,6 +56,16 @@ def init_db():
         )
     ''')
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS bot_transactions (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            type TEXT,
+            amount REAL,
+            details TEXT,
+            date TEXT
+        )
+    ''')
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS spam_tracker (
             user_id BIGINT PRIMARY KEY,
             abandon_count INTEGER DEFAULT 0,
@@ -67,6 +77,21 @@ def init_db():
     conn.close()
 
 init_db()
+
+def log_bot_transaction(user_id, tx_type, amount, details):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            'INSERT INTO bot_transactions (user_id, type, amount, details, date) VALUES (%s, %s, %s, %s, %s)',
+            (user_id, tx_type, amount, details, current_time)
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error logging bot transaction: {e}")
 
 def get_user(user_id):
     if user_id in user_cache:
@@ -175,7 +200,6 @@ waiting_for_custom_topup = {}
 admin_actions = {}
 
 def get_price(retail_price, panel_price, is_reseller):
-    """Returns panel price + 1 if reseller, else retail price"""
     if is_reseller:
         return panel_price + 1
     return retail_price
@@ -630,6 +654,9 @@ def handle_callback(call):
                 user["balance"] += amount_inr
                 save_user(user)
                 
+                # Log global transaction
+                log_bot_transaction(user_id, "TOPUP", amount_inr, f"FamPay UPI Topup ID: {order_id}")
+                
                 try:
                     bot.delete_message(call.message.chat.id, order_info["msg_id"])
                 except Exception:
@@ -774,6 +801,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("📋 Users Started List", callback_data="adm_users_list"))
+        markup.add(telebot.types.InlineKeyboardButton("📊 All Bot Transactions", callback_data="adm_all_transactions"))
         markup.add(telebot.types.InlineKeyboardButton("🔍 Check User Balance & Info", callback_data="adm_check_user"))
         markup.add(telebot.types.InlineKeyboardButton("💰 Add Balance to User", callback_data="adm_addbal_menu"))
         markup.add(telebot.types.InlineKeyboardButton("✂️ Cut Balance from User", callback_data="adm_cutbal_menu"))
@@ -797,6 +825,25 @@ def handle_callback(call):
             text += f"🆔 `{r[0]}` | {r[1]} | 📱 {r[2]} | Role: {r[3]} | 📅 {r[4]}\n\n"
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
         bot.edit_message_text(text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "adm_all_transactions" and is_admin:
+        bot.answer_callback_query(call.id)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, type, amount, details, date FROM bot_transactions ORDER BY id DESC LIMIT 30')
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        if not rows:
+            tx_text = "📊 **GLOBAL BOT TRANSACTIONS**\n\nNo transactions recorded yet."
+        else:
+            tx_text = "📊 **GLOBAL BOT TRANSACTIONS (Last 30)**\n\n"
+            for r in rows:
+                tx_text += f"👤 User: `{r[0]}`\n📌 Type: **{r[1]}** | Amount: `₹{r[2]:.2f}`\n📝 Info: {r[3]}\n📅 {r[4]}\n-------------------\n"
+                
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
+        bot.edit_message_text(tx_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "adm_broadcast" and is_admin:
         bot.answer_callback_query(call.id)
@@ -823,7 +870,6 @@ def handle_callback(call):
             bot.send_message(call.message.chat.id, "💬 Send the target User ID:")
 
 def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, product_name):
-    # Secure atomic balance deduction check
     fresh_user = get_user(user_id)
     if not fresh_user or fresh_user["balance"] < price_inr:
         current_bal = fresh_user["balance"] if fresh_user else 0.0
@@ -869,11 +915,13 @@ def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, 
             pass
 
         if license_key and "error" not in str(license_key).lower():
-            # Deduct balance securely only after successful API key generation
             fresh_user["balance"] -= price_inr
             fresh_user["orders_count"] += 1
             fresh_user["total_spent"] += price_inr
             save_user(fresh_user)
+
+            # Log global purchase transaction
+            log_bot_transaction(user_id, "PURCHASE", price_inr, f"Bought {product_name} ({duration_text})")
 
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = get_db_connection()
@@ -1052,6 +1100,7 @@ def admin_input(message):
             if target:
                 target["balance"] += amount
                 save_user(target)
+                log_bot_transaction(target_id, "ADMIN_ADD", amount, f"Admin added balance manually")
                 bot.send_message(message.chat.id, f"✅ Added ₹{amount} to `{target_id}`. New Balance: ₹{target['balance']:.2f}", parse_mode="Markdown")
                 try:
                     bot.send_message(target_id, f"💳 **ADMIN ADDED BALANCE**\n\nAdded: `₹{amount:.2f}`\nNew Balance: `₹{target['balance']:.2f}`", parse_mode="Markdown")
@@ -1060,7 +1109,7 @@ def admin_input(message):
             else:
                 bot.send_message(message.chat.id, "❌ User not found.")
         except Exception:
-            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT` (e.g., `6444009163 100`)", parse_mode="Markdown")
+            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT` (e.g., `6444009163 100`)", parse_Mode="Markdown")
     elif action == "cutbal":
         try:
             parts = text.split()
@@ -1069,6 +1118,7 @@ def admin_input(message):
             if target:
                 target["balance"] = max(0.0, target["balance"] - amount)
                 save_user(target)
+                log_bot_transaction(target_id, "ADMIN_CUT", amount, f"Admin deducted balance manually")
                 bot.send_message(message.chat.id, f"✅ Cut ₹{amount} from `{target_id}`. New Balance: ₹{target['balance']:.2f}", parse_mode="Markdown")
                 try:
                     bot.send_message(target_id, f"💳 **ADMIN DEDUCTED BALANCE**\n\nDeducted: `₹{amount:.2f}`\nNew Balance: `₹{target['balance']:.2f}`", parse_mode="Markdown")
@@ -1079,5 +1129,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT` (e.g., `6444009163 50`)", parse_mode="Markdown")
 
-print("Candid Store Bot is running securely with full admin balance controls!")
+print("Candid Store Bot is running with global bot transaction tracking!")
 bot.infinity_polling()
