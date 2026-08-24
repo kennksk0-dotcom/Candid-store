@@ -1,8 +1,7 @@
 import os
+import sqlite3
 import telebot
 import requests
-import psycopg2
-import psycopg2.extras
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
@@ -18,21 +17,20 @@ XYZ_API_URL = "https://adminpanels.shop/api/reseller_v1.php"
 XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
-# 3. Database Connection (Loaded safely from Railway Environment Variables)
-SUPABASE_DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:candidstore1234123@db.uujpztqpiqtxcqoglbqh.supabase.co:5432/postgres")
-
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- CLOUD DATABASE SETUP (PostgreSQL / Railway / Supabase) ---
+# --- LOCAL SQLITE DATABASE SETUP ---
 def get_db_connection():
-    return psycopg2.connect(SUPABASE_DB_URL, sslmode='require')
+    conn = sqlite3.connect("database.db")
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
+            user_id INTEGER PRIMARY KEY,
             name TEXT,
             phone TEXT,
             joined TEXT,
@@ -47,8 +45,8 @@ def init_db():
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS orders (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
             duration TEXT,
             license_key TEXT,
             price REAL,
@@ -57,7 +55,7 @@ def init_db():
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS spam_tracker (
-            user_id BIGINT PRIMARY KEY,
+            user_id INTEGER PRIMARY KEY,
             abandon_count INTEGER DEFAULT 0,
             timeout_until TEXT
         )
@@ -70,8 +68,8 @@ init_db()
 
 def get_user(user_id):
     conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
     row = cursor.fetchone()
     cursor.close()
     conn.close()
@@ -88,17 +86,17 @@ def save_user(user_data):
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO users (user_id, name, phone, joined, balance, total_spent, orders_count, role, banned, verified, total_referrals)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (user_id) DO UPDATE SET
-            name = EXCLUDED.name,
-            phone = EXCLUDED.phone,
-            balance = EXCLUDED.balance,
-            total_spent = EXCLUDED.total_spent,
-            orders_count = EXCLUDED.orders_count,
-            role = EXCLUDED.role,
-            banned = EXCLUDED.banned,
-            verified = EXCLUDED.verified,
-            total_referrals = EXCLUDED.total_referrals
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            name = excluded.name,
+            phone = excluded.phone,
+            balance = excluded.balance,
+            total_spent = excluded.total_spent,
+            orders_count = excluded.orders_count,
+            role = excluded.role,
+            banned = excluded.banned,
+            verified = excluded.verified,
+            total_referrals = excluded.total_referrals
     ''', (
         user_data["user_id"], user_data["name"], user_data.get("phone"), user_data["joined"],
         user_data["balance"], user_data["total_spent"], user_data["orders_count"],
@@ -111,12 +109,12 @@ def save_user(user_data):
 def check_timeout(user_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT timeout_until FROM spam_tracker WHERE user_id = %s', (user_id,))
+    cursor.execute('SELECT timeout_until FROM spam_tracker WHERE user_id = ?', (user_id,))
     row = cursor.fetchone()
     cursor.close()
     conn.close()
-    if row and row[0]:
-        timeout_time = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+    if row and row["timeout_until"]:
+        timeout_time = datetime.strptime(row["timeout_until"], "%Y-%m-%d %H:%M:%S")
         if datetime.now() < timeout_time:
             return int((timeout_time - datetime.now()).total_seconds() / 60)
     return 0
@@ -124,17 +122,17 @@ def check_timeout(user_id):
 def add_abandon(user_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT abandon_count FROM spam_tracker WHERE user_id = %s', (user_id,))
+    cursor.execute('SELECT abandon_count FROM spam_tracker WHERE user_id = ?', (user_id,))
     row = cursor.fetchone()
-    count = (row[0] + 1) if row else 1
+    count = (row["abandon_count"] + 1) if row else 1
     if count >= 7:
         minutes = 15 * (2 ** (count - 7))
         timeout_until = (datetime.now() + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
     else:
         timeout_until = None
     cursor.execute('''
-        INSERT INTO spam_tracker (user_id, abandon_count, timeout_until) VALUES (%s, %s, %s)
-        ON CONFLICT (user_id) DO UPDATE SET abandon_count = EXCLUDED.abandon_count, timeout_until = EXCLUDED.timeout_until
+        INSERT INTO spam_tracker (user_id, abandon_count, timeout_until) VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET abandon_count = excluded.abandon_count, timeout_until = excluded.timeout_until
     ''', (user_id, count, timeout_until))
     conn.commit()
     cursor.close()
@@ -408,7 +406,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = %s', (user_id,))
+        cursor.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = ?', (user_id,))
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -418,7 +416,7 @@ def handle_callback(call):
         else:
             history_text = "🛍️ — **MY ORDERS** — 🛍️\n\n"
             for r in rows:
-                history_text += f"🛒 **Mod Config Key**\n⏳ {r[0]}\n🔑 `{r[1]}`\n💰 ₹{r[2]} | 📅 {r[3]}\n-------------------\n"
+                history_text += f"🛒 **Mod Config Key**\n⏳ {r['duration']}\n🔑 `{r['license_key']}`\n💰 ₹{r['price']} | 📅 {r['date']}\n-------------------\n"
                 
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.edit_message_text(history_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
@@ -482,7 +480,7 @@ def handle_callback(call):
         
         text = "📋 — **BOT USERS** — 📋\n\n"
         for r in rows:
-            text += f"🆔 `{r[0]}` | {r[1]} | 📱 {r[2]} | Role: {r[3]} | 📅 {r[4]}\n\n"
+            text += f"🆔 `{r['user_id']}` | {r['name']} | 📱 {r['phone']} | Role: {r['role']} | 📅 {r['joined']}\n\n"
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
         bot.edit_message_text(text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
@@ -536,7 +534,7 @@ def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, 
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute(
-                    'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)',
+                    'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (?, ?, ?, ?, ?)',
                     (user_id, duration_text, str(license_key), price_inr, current_time)
                 )
                 conn.commit()
@@ -669,5 +667,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Candid Store Bot is running smoothly...")
+print("Candid Store Bot is running locally and smoothly...")
 bot.infinity_polling()
