@@ -1,6 +1,7 @@
 import telebot
 import requests
-import sqlite3
+import psycopg2
+import psycopg2.extras
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
@@ -11,20 +12,26 @@ ADMIN_ID = 7997110885
 FAMPAY_API_KEY = "FAM_LIVE_sk_hRGdY9XAmPu7wzRg9HXjwa8pHdPhKNGB"
 FAMPAY_BASE_URL = "https://py.freepanel.in/api/v1"
 
-# 2. Updated Reseller Panel API Configuration
+# 2. Reseller Panel API Configuration
 XYZ_API_URL = "https://adminpanels.shop/api/reseller_v1.php"
 XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
+# 3. Supabase PostgreSQL Cloud Database URI
+SUPABASE_DB_URL = "postgresql://postgres:?NDWDnuZPq8!*7y@db.uujpztqpiqtxcoglbqh.supabase.co:5432/postgres"
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- SECURE DATABASE SETUP (SQLite) ---
+# --- CLOUD DATABASE SETUP (PostgreSQL / Supabase) ---
+def get_db_connection():
+    return psycopg2.connect(SUPABASE_DB_URL, sslmode='require')
+
 def init_db():
-    conn = sqlite3.connect('database.db', check_same_thread=False)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
+            user_id BIGINT PRIMARY KEY,
             name TEXT,
             phone TEXT,
             joined TEXT,
@@ -39,8 +46,8 @@ def init_db():
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
             duration TEXT,
             license_key TEXT,
             price REAL,
@@ -49,49 +56,63 @@ def init_db():
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS spam_tracker (
-            user_id INTEGER PRIMARY KEY,
+            user_id BIGINT PRIMARY KEY,
             abandon_count INTEGER DEFAULT 0,
             timeout_until TEXT
         )
     ''')
     conn.commit()
+    cursor.close()
     conn.close()
 
 init_db()
 
 def get_user(user_id):
-    conn = sqlite3.connect('database.db', check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
     row = cursor.fetchone()
+    cursor.close()
     conn.close()
     if row:
         return {
-            "user_id": row[0], "name": row[1], "phone": row[2], "joined": row[3],
-            "balance": row[4], "total_spent": row[5], "orders_count": row[6],
-            "role": row[7], "banned": bool(row[8]), "verified": bool(row[9]), "total_referrals": row[10]
+            "user_id": row["user_id"], "name": row["name"], "phone": row["phone"], "joined": row["joined"],
+            "balance": row["balance"], "total_spent": row["total_spent"], "orders_count": row["orders_count"],
+            "role": row["role"], "banned": bool(row["banned"]), "verified": bool(row["verified"]), "total_referrals": row["total_referrals"]
         }
     return None
 
 def save_user(user_data):
-    conn = sqlite3.connect('database.db', check_same_thread=False)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT OR REPLACE INTO users (user_id, name, phone, joined, balance, total_spent, orders_count, role, banned, verified, total_referrals)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO users (user_id, name, phone, joined, balance, total_spent, orders_count, role, banned, verified, total_referrals)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (user_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            phone = EXCLUDED.phone,
+            balance = EXCLUDED.balance,
+            total_spent = EXCLUDED.total_spent,
+            orders_count = EXCLUDED.orders_count,
+            role = EXCLUDED.role,
+            banned = EXCLUDED.banned,
+            verified = EXCLUDED.verified,
+            total_referrals = EXCLUDED.total_referrals
     ''', (
         user_data["user_id"], user_data["name"], user_data.get("phone"), user_data["joined"],
         user_data["balance"], user_data["total_spent"], user_data["orders_count"],
         user_data["role"], int(user_data["banned"]), int(user_data["verified"]), user_data.get("total_referrals", 0)
     ))
     conn.commit()
+    cursor.close()
     conn.close()
 
 def check_timeout(user_id):
-    conn = sqlite3.connect('database.db', check_same_thread=False)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT timeout_until FROM spam_tracker WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT timeout_until FROM spam_tracker WHERE user_id = %s', (user_id,))
     row = cursor.fetchone()
+    cursor.close()
     conn.close()
     if row and row[0]:
         timeout_time = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
@@ -100,9 +121,9 @@ def check_timeout(user_id):
     return 0
 
 def add_abandon(user_id):
-    conn = sqlite3.connect('database.db', check_same_thread=False)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT abandon_count FROM spam_tracker WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT abandon_count FROM spam_tracker WHERE user_id = %s', (user_id,))
     row = cursor.fetchone()
     count = (row[0] + 1) if row else 1
     if count >= 7:
@@ -110,8 +131,12 @@ def add_abandon(user_id):
         timeout_until = (datetime.now() + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
     else:
         timeout_until = None
-    cursor.execute('INSERT OR REPLACE INTO spam_tracker (user_id, abandon_count, timeout_until) VALUES (?, ?, ?)', (user_id, count, timeout_until))
+    cursor.execute('''
+        INSERT INTO spam_tracker (user_id, abandon_count, timeout_until) VALUES (%s, %s, %s)
+        ON CONFLICT (user_id) DO UPDATE SET abandon_count = EXCLUDED.abandon_count, timeout_until = EXCLUDED.timeout_until
+    ''', (user_id, count, timeout_until))
     conn.commit()
+    cursor.close()
     conn.close()
 
 user_orders = {}
@@ -159,7 +184,7 @@ def send_welcome(message):
         )
         return
 
-    show_main_menu(message.chat.id, user_id)
+    show_main_menu(message.chat.id, user_id, is_new=True)
 
 @bot.message_handler(content_types=['contact'])
 def handle_contact(message):
@@ -178,9 +203,9 @@ def handle_contact(message):
                 "verified": True, "total_referrals": 0
             })
         bot.send_message(message.chat.id, "✅ **Verification Successful!**", reply_markup=telebot.types.ReplyKeyboardRemove(), parse_mode="Markdown")
-        show_main_menu(message.chat.id, user_id)
+        show_main_menu(message.chat.id, user_id, is_new=True)
 
-def show_main_menu(chat_id, user_id):
+def show_main_menu(chat_id, user_id, message_id=None, is_new=False):
     user = get_user(user_id)
     is_admin = (user_id == ADMIN_ID)
     user_role = user.get("role", "Customer") if user else "Customer"
@@ -204,7 +229,10 @@ def show_main_menu(chat_id, user_id):
     if is_admin:
         markup.add(telebot.types.InlineKeyboardButton("⚡ Master Admin Panel", callback_data="admin_panel"))
         
-    bot.send_message(chat_id, welcome_text, reply_markup=markup, parse_mode="Markdown")
+    if is_new or not message_id:
+        bot.send_message(chat_id, welcome_text, reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.edit_message_text(welcome_text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
@@ -229,9 +257,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🎮 Bala Mod Config FF Nonroot (ID: 142)", callback_data="buy_config"))
         markup.add(telebot.types.InlineKeyboardButton("⚡ Bala Mod XYZ ~ V2 FF Nonroot (ID: 136)", callback_data="buy_v2"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.send_message(call.message.chat.id, catalog_text, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text(catalog_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # --- PRODUCT 1: Bala Mod Config (ID: 142) ---
     elif call.data == "buy_config":
         bot.answer_callback_query(call.id)
         is_reseller = (user_role == "Reseller" or is_admin)
@@ -257,9 +284,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"24 Hours — ₹{p24}", callback_data="cfg_24h"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
         
-        bot.send_message(call.message.chat.id, card_text, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text(card_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # --- PRODUCT 2: Bala Mod XYZ ~ V2 FF Nonroot (ID: 136) ---
     elif call.data == "buy_v2":
         bot.answer_callback_query(call.id)
         is_reseller = (user_role == "Reseller" or is_admin)
@@ -293,9 +319,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"7 DayS — ₹{v2_7d}", callback_data="v2_7d"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
         
-        bot.send_message(call.message.chat.id, card_text, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text(card_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # --- HANDLE CONFIG PURCHASES (PID: 142) ---
     elif call.data.startswith("cfg_"):
         bot.answer_callback_query(call.id, text="Processing order...")
         is_reseller = (user_role == "Reseller" or is_admin)
@@ -310,7 +335,6 @@ def handle_callback(call):
         duration_text, price_inr = cfg_map[call.data]
         execute_purchase(call, user_id, user, product_id="142", duration_text=duration_text, price_inr=price_inr, product_name="Bala Mod Config")
 
-    # --- HANDLE V2 PURCHASES (PID: 136) ---
     elif call.data.startswith("v2_"):
         bot.answer_callback_query(call.id, text="Processing order...")
         is_reseller = (user_role == "Reseller" or is_admin)
@@ -335,14 +359,14 @@ def handle_callback(call):
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
         )
-        bot.send_message(call.message.chat.id, "💳 **Add Balance**\n\nPlease reply with the amount in Rupees you want to add (e.g. `100`):", parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text("💳 **Add Balance**\n\nPlease reply with the amount in Rupees you want to add (e.g. `100`):", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "cancel_topup":
         bot.answer_callback_query(call.id, text="Order cancelled.")
         add_abandon(user_id)
         if user_id in user_orders:
             del user_orders[user_id]
-        bot.send_message(call.message.chat.id, "❌ **Order Cancelled.**", parse_mode="Markdown")
+        bot.edit_message_text("❌ **Order Cancelled.**", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
     elif call.data == "check_topup":
         bot.answer_callback_query(call.id, text="Verifying payment...")
@@ -380,25 +404,26 @@ def handle_callback(call):
             f"📅 Joined: {user['joined']}"
         )
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.send_message(call.message.chat.id, profile_text, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text(profile_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "orders":
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect('database.db', check_same_thread=False)
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = ?', (user_id,))
+        cursor.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = %s', (user_id,))
         rows = cursor.fetchall()
+        cursor.close()
         conn.close()
         
         if not rows:
-            bot.send_message(call.message.chat.id, "📦 You have no past orders.")
-            return
-            
-        history_text = "🛍️ — **MY ORDERS** — 🛍️\n\n"
-        for r in rows:
-            history_text += f"🛒 **Mod Config Key**\n⏳ {r[0]}\n🔑 `{r[1]}`\n💰 ₹{r[2]} | 📅 {r[3]}\n-------------------\n"
+            history_text = "📦 You have no past orders."
+        else:
+            history_text = "🛍️ — **MY ORDERS** — 🛍️\n\n"
+            for r in rows:
+                history_text += f"🛒 **Mod Config Key**\n⏳ {r[0]}\n🔑 `{r[1]}`\n💰 ₹{r[2]} | 📅 {r[3]}\n-------------------\n"
+                
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.send_message(call.message.chat.id, history_text, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text(history_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "referral":
         bot.answer_callback_query(call.id)
@@ -413,11 +438,11 @@ def handle_callback(call):
             f"🔗 **Your Referral Link:**\n`{ref_link}`"
         )
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.send_message(call.message.chat.id, ref_text, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text(ref_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "main_menu":
         bot.answer_callback_query(call.id)
-        show_main_menu(call.message.chat.id, user_id)
+        show_main_menu(call.message.chat.id, user_id, message_id=call.message.message_id)
 
     elif call.data == "admin_panel" and is_admin:
         bot.answer_callback_query(call.id)
@@ -427,20 +452,22 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🔨 Ban / Unban User", callback_data="adm_ban_menu"))
         markup.add(telebot.types.InlineKeyboardButton("💰 Add Balance to User", callback_data="adm_addbal_menu"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.send_message(call.message.chat.id, "👑 **MASTER ADMIN PANEL**", reply_markup=markup, parse_mode="Markdown")
+        bot.edit_message_text("👑 **MASTER ADMIN PANEL**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif call.data == "adm_users_list" and is_admin:
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect('database.db', check_same_thread=False)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT user_id, name, phone, role, joined FROM users')
         rows = cursor.fetchall()
+        cursor.close()
         conn.close()
         
         text = "📋 — **BOT USERS** — 📋\n\n"
         for r in rows:
             text += f"🆔 `{r[0]}` | {r[1]} | 📱 {r[2]} | Role: {r[3]} | 📅 {r[4]}\n\n"
-        bot.send_message(call.message.chat.id, text[:4000], parse_mode="Markdown")
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
+        bot.edit_message_text(text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data in ["adm_toggle_reseller", "adm_ban_menu", "adm_addbal_menu"] and is_admin:
         bot.answer_callback_query(call.id)
@@ -489,13 +516,14 @@ def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, 
             if license_key and "error" not in str(license_key).lower():
                 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                conn = sqlite3.connect('database.db', check_same_thread=False)
+                conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute(
-                    'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (?, ?, ?, ?, ?)',
+                    'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)',
                     (user_id, duration_text, str(license_key), price_inr, current_time)
                 )
                 conn.commit()
+                cursor.close()
                 conn.close()
                 
                 bot.send_message(
@@ -624,5 +652,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Candid Store Bot with adminpanels.shop API is running...")
+print("Candid Store Cloud-Connected Bot with Message Editing is running...")
 bot.infinity_polling()
