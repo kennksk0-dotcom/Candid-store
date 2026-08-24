@@ -23,7 +23,6 @@ SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# In-memory cache for instant responses
 user_cache = {}
 
 def get_db_connection():
@@ -179,14 +178,13 @@ admin_actions = {}
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
-    
     if check_timeout(user_id) > 0:
-        bot.send_message(message.chat.id, "⏳ You are temporarily timed out for canceling payment orders too many times.", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "You are temporarily timed out for canceling payment orders too many times.", parse_mode="Markdown")
         return
 
     user = get_user(user_id)
     if user and user["banned"]:
-        bot.send_message(message.chat.id, "❌ Your account has been suspended.")
+        bot.send_message(message.chat.id, "Your account has been suspended.")
         return
 
     args = message.text.split()
@@ -209,12 +207,8 @@ def send_welcome(message):
                 "verified": False, "total_referrals": 0
             })
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        markup.add(telebot.types.KeyboardButton("🛡️ Share Contact for Identity Check", request_contact=True))
-        bot.send_message(
-            message.chat.id,
-            "🔐 **IDENTITY CHECK NEEDED**\n\nBefore exploring our store, please verify your contact:",
-            parse_mode="Markdown", reply_markup=markup
-        )
+        markup.add(telebot.types.KeyboardButton("Share Contact for Verification", request_contact=True))
+        bot.send_message(message.chat.id, "IDENTITY CHECK NEEDED\n\nPlease verify your contact before continuing:", parse_mode="Markdown", reply_markup=markup)
         return
 
     show_main_menu(message.chat.id, user_id)
@@ -235,7 +229,7 @@ def handle_contact(message):
                 "total_spent": 0.0, "orders_count": 0, "role": "Customer", "banned": False,
                 "verified": True, "total_referrals": 0
             })
-        bot.send_message(message.chat.id, "✅ **Verification Successful!**", reply_markup=telebot.types.ReplyKeyboardRemove(), parse_mode="Markdown")
+        bot.send_message(message.chat.id, "Verification Successful!", reply_markup=telebot.types.ReplyKeyboardRemove(), parse_mode="Markdown")
         show_main_menu(message.chat.id, user_id)
 
 def show_main_menu(chat_id, user_id):
@@ -243,24 +237,20 @@ def show_main_menu(chat_id, user_id):
     is_admin = (user_id == ADMIN_ID)
     user_role = user.get("role", "Customer") if user else "Customer"
     
-    welcome_text = (
-        "👋 Welcome to Candid Store!\n\n"
-        "🌟 — STORE HIGHLIGHTS — 🌟\n"
-        "🔑 Premium Mod & PC Configs (Instant Key Delivery)\n"
-        "🔒 Secure Automated Checkout"
-    )
+    welcome_text = "Welcome to Candid Store!\n\nSelect an option below:"
     
     markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("📦 All Products", callback_data="all_products"))
-    markup.add(telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
-               telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders"))
-    markup.add(telebot.types.InlineKeyboardButton("🎁 Referral", callback_data="referral"),
-               telebot.types.InlineKeyboardButton("👑 Profile", callback_data="profile"))
+    markup.add(telebot.types.InlineKeyboardButton("All Products", callback_data="all_products"))
+    markup.add(telebot.types.InlineKeyboardButton("Guest ID 9 Level Accounts - ₹15", callback_data="buy_guest_account"))
+    markup.add(telebot.types.InlineKeyboardButton("Add Balance", callback_data="add_balance"),
+               telebot.types.InlineKeyboardButton("My Orders", callback_data="orders"))
+    markup.add(telebot.types.InlineKeyboardButton("Referral", callback_data="referral"),
+               telebot.types.InlineKeyboardButton("Profile", callback_data="profile"))
     
     if is_admin or user_role == "Reseller":
-        welcome_text += f"\n\n⚙️ [{user_role} Dashboard Unlocked]"
+        welcome_text += f"\n\n[{user_role} Dashboard Unlocked]"
     if is_admin:
-        markup.add(telebot.types.InlineKeyboardButton("⚡ Master Admin Panel", callback_data="admin_panel"))
+        markup.add(telebot.types.InlineKeyboardButton("Master Admin Panel", callback_data="admin_panel"))
         
     bot.send_message(chat_id, welcome_text, reply_markup=markup, parse_mode="Markdown")
 
@@ -279,21 +269,26 @@ def handle_callback(call):
 
     if call.data == "all_products":
         bot.answer_callback_query(call.id)
-        catalog_text = "🛍️ — **STORE CATALOG** — 🛍️\n\nSelect a product category below:"
+        catalog_text = "STORE CATALOG\n\nSelect a product category below:"
         markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🎮 Bala Mod Config FF (ID: 142)", callback_data="buy_config"))
-        markup.add(telebot.types.InlineKeyboardButton("⚡ Bala Mod V2 FF (ID: 136)", callback_data="buy_v2"))
-        markup.add(telebot.types.InlineKeyboardButton("💻 BR Mod PC Version (ID: 49)", callback_data="buy_br_pc"))
-        markup.add(telebot.types.InlineKeyboardButton("🤖 BR Mod Root Android (ID: 67)", callback_data="buy_br_root"))
-        markup.add(telebot.types.InlineKeyboardButton("📱 DripClient Nonroot (ID: 62)", callback_data="buy_drip"))
-        markup.add(telebot.types.InlineKeyboardButton("👑 Haxx-Cker Pro Root (ID: 64)", callback_data="buy_haxx"))
-        markup.add(telebot.types.InlineKeyboardButton("🍏 Migul iPhone iOS (ID: 69)", callback_data="buy_migul"))
-        markup.add(telebot.types.InlineKeyboardButton("🎨 Pato Team Android (ID: 54)", callback_data="buy_pato"))
-        markup.add(telebot.types.InlineKeyboardButton("🛡️ Prime Hook Nonroot (ID: 48)", callback_data="buy_prime"))
-        markup.add(telebot.types.InlineKeyboardButton("🔥 Silent Cheat Nonroot (ID: 127)", callback_data="buy_silent_nonroot"))
-        markup.add(telebot.types.InlineKeyboardButton("💥 Silent Cheat Root (ID: 128)", callback_data="buy_silent_root"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("Bala Mod Config FF", callback_data="buy_config"))
+        markup.add(telebot.types.InlineKeyboardButton("Bala Mod V2 FF", callback_data="buy_v2"))
+        markup.add(telebot.types.InlineKeyboardButton("BR Mod PC Version", callback_data="buy_br_pc"))
+        markup.add(telebot.types.InlineKeyboardButton("BR Mod Root Android", callback_data="buy_br_root"))
+        markup.add(telebot.types.InlineKeyboardButton("DripClient Nonroot", callback_data="buy_drip"))
+        markup.add(telebot.types.InlineKeyboardButton("Haxx-Cker Pro Root", callback_data="buy_haxx"))
+        markup.add(telebot.types.InlineKeyboardButton("Migul iPhone iOS", callback_data="buy_migul"))
+        markup.add(telebot.types.InlineKeyboardButton("Pato Team Android", callback_data="buy_pato"))
+        markup.add(telebot.types.InlineKeyboardButton("Prime Hook Nonroot", callback_data="buy_prime"))
+        markup.add(telebot.types.InlineKeyboardButton("Silent Cheat Nonroot", callback_data="buy_silent_nonroot"))
+        markup.add(telebot.types.InlineKeyboardButton("Silent Cheat Root", callback_data="buy_silent_root"))
+        markup.add(telebot.types.InlineKeyboardButton("Back to Menu", callback_data="main_menu"))
         bot.edit_message_text(catalog_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "buy_guest_account":
+        bot.answer_callback_query(call.id, text="Processing order...")
+        # Assuming guest accounts item ID on your panel is configured or can be adjusted; here we use an example Product ID or direct execution
+        execute_purchase(call, user_id, user, product_id="guest_account_id_here", duration_text="1 Account", price_inr=15.0, product_name="Guest ID 9 Level Account")
 
     # --- CATEGORY MENUS ---
     elif call.data == "buy_config":
@@ -305,8 +300,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"6 Hours — ₹{60 if is_res else 75}", callback_data="cfg_6h"))
         markup.add(telebot.types.InlineKeyboardButton(f"12 Hours — ₹{100 if is_res else 120}", callback_data="cfg_12h"))
         markup.add(telebot.types.InlineKeyboardButton(f"24 Hours — ₹{140 if is_res else 170}", callback_data="cfg_24h"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("🏷️ **BALA MOD CONFIG FF NONROOT**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("BALA MOD CONFIG FF NONROOT", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "buy_v2":
         bot.answer_callback_query(call.id)
@@ -321,8 +316,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"3 Days — ₹{550 if is_res else 650}", callback_data="v2_3d"))
         markup.add(telebot.types.InlineKeyboardButton(f"5 Days — ₹{850 if is_res else 1000}", callback_data="v2_5d"))
         markup.add(telebot.types.InlineKeyboardButton(f"7 Days — ₹{1100 if is_res else 1300}", callback_data="v2_7d"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("⚡ **BALA MOD XYZ ~ V2 FF NONROOT**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("BALA MOD XYZ ~ V2 FF NONROOT", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "buy_br_pc":
         bot.answer_callback_query(call.id)
@@ -335,8 +330,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"10 Days Pc Bypass + Silent — ₹{279 if is_res else 379}", callback_data="br_10d_bypass"))
         markup.add(telebot.types.InlineKeyboardButton(f"30 Day Pc Modmenu x86 — ₹{499 if is_res else 599}", callback_data="br_30d_mod"))
         markup.add(telebot.types.InlineKeyboardButton(f"30 Days Pc Aim Silent — ₹{499 if is_res else 599}", callback_data="br_30d_silent"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("💻 **BR MOD FF PC VERSION**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("BR MOD FF PC VERSION", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "buy_br_root":
         bot.answer_callback_query(call.id)
@@ -346,8 +341,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"7 Days — ₹{150 if is_res else 230}", callback_data="br_root_7d"))
         markup.add(telebot.types.InlineKeyboardButton(f"15 Days — ₹{300 if is_res else 380}", callback_data="br_root_15d"))
         markup.add(telebot.types.InlineKeyboardButton(f"30 Days — ₹{400 if is_res else 535}", callback_data="br_root_30d"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("🤖 **BR MOD FF ROOT ANDROID**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("BR MOD FF ROOT ANDROID", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "buy_drip":
         bot.answer_callback_query(call.id)
@@ -358,8 +353,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"7 Days Nonroot — ₹{125 if is_res else 245}", callback_data="drip_7d"))
         markup.add(telebot.types.InlineKeyboardButton(f"15 Days Nonroot — ₹{200 if is_res else 350}", callback_data="drip_15d"))
         markup.add(telebot.types.InlineKeyboardButton(f"30 Days Nonroot — ₹{300 if is_res else 550}", callback_data="drip_30d"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("📱 **DRIPCLIENT FF NONROOT APKMOD**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("DRIPCLIENT FF NONROOT APKMOD", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "buy_haxx":
         bot.answer_callback_query(call.id)
@@ -368,8 +363,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"10 Days — ₹{360 if is_res else 500}", callback_data="haxx_10d"))
         markup.add(telebot.types.InlineKeyboardButton(f"20 Days — ₹{700 if is_res else 850}", callback_data="haxx_20d"))
         markup.add(telebot.types.InlineKeyboardButton(f"30 Days — ₹{1050 if is_res else 1250}", callback_data="haxx_30d"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("👑 **HAXX-CKER PRO FF ROOT**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("HAXX-CKER PRO FF ROOT", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "buy_migul":
         bot.answer_callback_query(call.id)
@@ -381,8 +376,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"1 Day PRO — ₹{200 if is_res else 250}", callback_data="mig_1d_p"))
         markup.add(telebot.types.InlineKeyboardButton(f"7 Days PRO — ₹{600 if is_res else 800}", callback_data="mig_7d_p"))
         markup.add(telebot.types.InlineKeyboardButton(f"30 Days PRO — ₹{1000 if is_res else 1300}", callback_data="mig_30d_p"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("🍏 **MIGUL IPHONE IOS FF**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("MIGUL IPHONE IOS FF", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "buy_pato":
         bot.answer_callback_query(call.id)
@@ -392,8 +387,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"7 Days Mix — ₹{199 if is_res else 260}", callback_data="pato_7d"))
         markup.add(telebot.types.InlineKeyboardButton(f"15 Days Mix — ₹{388 if is_res else 490}", callback_data="pato_15d"))
         markup.add(telebot.types.InlineKeyboardButton(f"30 Days Mix — ₹{469 if is_res else 720}", callback_data="pato_30d"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("🎨 **PATO TEAM FF ALL ANDROID**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("PATO TEAM FF ALL ANDROID", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "buy_prime":
         bot.answer_callback_query(call.id)
@@ -403,8 +398,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"3 Days Nonroot — ₹{60 if is_res else 160}", callback_data="prime_3d"))
         markup.add(telebot.types.InlineKeyboardButton(f"7 Days Nonroot — ₹{120 if is_res else 300}", callback_data="prime_7d"))
         markup.add(telebot.types.InlineKeyboardButton(f"10 Days Nonroot — ₹{149 if is_res else 379}", callback_data="prime_10d"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("🛡️ **PRIME HOOK FF NONROOT ANDROID**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("PRIME HOOK FF NONROOT ANDROID", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "buy_silent_nonroot":
         bot.answer_callback_query(call.id)
@@ -415,8 +410,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"7 Days — ₹{130 if is_res else 230}", callback_data="sil_nr_7d"))
         markup.add(telebot.types.InlineKeyboardButton(f"14 Days — ₹{260 if is_res else 350}", callback_data="sil_nr_14d"))
         markup.add(telebot.types.InlineKeyboardButton(f"28 Days — ₹{520 if is_res else 800}", callback_data="sil_nr_28d"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("🔥 **SILENT CHEAT FF NONROOT APKMOD (ID: 127)**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("SILENT CHEAT FF NONROOT APKMOD", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "buy_silent_root":
         bot.answer_callback_query(call.id)
@@ -432,8 +427,8 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton(f"14 Days Brutal — ₹{260 if is_res else 350}", callback_data="sil_r_14d_brut"))
         markup.add(telebot.types.InlineKeyboardButton(f"28 Days Safe — ₹{520 if is_res else 800}", callback_data="sil_r_28d_safe"))
         markup.add(telebot.types.InlineKeyboardButton(f"28 Days Brutal — ₹{520 if is_res else 800}", callback_data="sil_r_28d_brut"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="all_products"))
-        bot.edit_message_text("💥 **SILENT CHEAT FF ROOT ANDROID (ID: 128)**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("Back to Catalog", callback_data="all_products"))
+        bot.edit_message_text("SILENT CHEAT FF ROOT ANDROID", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     # --- PURCHASE EXECUTIONS ---
     elif call.data.startswith("cfg_"):
@@ -591,21 +586,21 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         waiting_for_custom_topup[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(
-            telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
+            telebot.types.InlineKeyboardButton("Back to Menu", callback_data="main_menu")
         )
-        bot.edit_message_text("💳 **Add Balance**\n\nPlease reply with the amount in Rupees you want to add (e.g. `100`):", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text("Add Balance\n\nPlease reply with the amount in Rupees you want to add (e.g. `100`):", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "cancel_topup":
         bot.answer_callback_query(call.id, text="Order cancelled.")
         add_abandon(user_id)
         if user_id in user_orders:
             del user_orders[user_id]
-        bot.edit_message_text("❌ **Order Cancelled.**", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        bot.edit_message_text("Order Cancelled.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
     elif call.data == "check_topup":
         bot.answer_callback_query(call.id, text="Verifying payment...")
         if user_id not in user_orders:
-            bot.send_message(call.message.chat.id, "❌ No active top-up session.")
+            bot.send_message(call.message.chat.id, "No active top-up session.")
             return
             
         order_id = user_orders[user_id]["order_id"]
@@ -618,26 +613,26 @@ def handle_callback(call):
                 user["balance"] += amount_inr
                 save_user(user)
                 del user_orders[user_id]
-                bot.send_message(call.message.chat.id, f"✅ ₹{amount_inr} successfully added to your wallet!\n💳 New Balance: ₹{user['balance']:.2f}")
+                bot.send_message(call.message.chat.id, f"₹{amount_inr} successfully added to your wallet!\nNew Balance: ₹{user['balance']:.2f}")
             else:
-                bot.send_message(call.message.chat.id, "⏳ Payment is still pending...")
+                bot.send_message(call.message.chat.id, "Payment is still pending...")
         except Exception:
-            bot.send_message(call.message.chat.id, "⚠️ Verification check failed.")
+            bot.send_message(call.message.chat.id, "Verification check failed.")
 
     elif call.data == "profile":
         bot.answer_callback_query(call.id)
-        role_display = "👑 Master Admin" if is_admin else user_role
+        role_display = "Master Admin" if is_admin else user_role
         profile_text = (
-            f"👤 — **YOUR PROFILE** — 👤\n\n"
-            f"🆔 ID: `{user_id}`\n"
-            f"📛 Name: {user['name']}\n"
-            f"👑 Account: {role_display}\n"
-            f"💳 Balance: ₹{user['balance']:.2f}\n"
-            f"📦 Orders: {user['orders_count']}\n"
-            f"💸 Spent: ₹{user['total_spent']:.2f}\n"
-            f"📅 Joined: {user['joined']}"
+            f"YOUR PROFILE\n\n"
+            f"ID: `{user_id}`\n"
+            f"Name: {user['name']}\n"
+            f"Account: {role_display}\n"
+            f"Balance: ₹{user['balance']:.2f}\n"
+            f"Orders: {user['orders_count']}\n"
+            f"Spent: ₹{user['total_spent']:.2f}\n"
+            f"Joined: {user['joined']}"
         )
-        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("Back to Menu", callback_data="main_menu"))
         bot.edit_message_text(profile_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "orders":
@@ -650,13 +645,13 @@ def handle_callback(call):
         conn.close()
         
         if not rows:
-            history_text = "📦 You have no past orders."
+            history_text = "You have no past orders."
         else:
-            history_text = "🛍️ — **MY ORDERS** — 🛍️\n\n"
+            history_text = "MY ORDERS\n\n"
             for r in rows:
-                history_text += f"🛒 **License Key**\n⏳ {r[0]}\n🔑 `{r[1]}`\n💰 ₹{r[2]} | 📅 {r[3]}\n-------------------\n"
+                history_text += f"License Key: {r[0]}\n`{r[1]}`\nPrice: ₹{r[2]} | Date: {r[3]}\n-------------------\n"
                 
-        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("Back to Menu", callback_data="main_menu"))
         bot.edit_message_text(history_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "referral":
@@ -664,13 +659,13 @@ def handle_callback(call):
         bot_username = bot.get_me().username
         ref_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
         ref_text = (
-            f"🎁 **REFERRAL PROGRAM**\n\n"
-            f"✅ **Status:** ACTIVE\n"
-            f"👥 Total Referrals: {user.get('total_referrals', 0)}\n"
-            f"💳 Available Balance: ₹{user['balance']:.2f}\n\n"
-            f"🔗 **Your Referral Link:**\n`{ref_link}`"
+            f"REFERRAL PROGRAM\n\n"
+            f"Status: ACTIVE\n"
+            f"Total Referrals: {user.get('total_referrals', 0)}\n"
+            f"Available Balance: ₹{user['balance']:.2f}\n\n"
+            f"Your Referral Link:\n`{ref_link}`"
         )
-        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("Back to Menu", callback_data="main_menu"))
         bot.edit_message_text(ref_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "main_menu":
@@ -680,13 +675,13 @@ def handle_callback(call):
     elif call.data == "admin_panel" and is_admin:
         bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("📋 Users Started List", callback_data="adm_users_list"))
-        markup.add(telebot.types.InlineKeyboardButton("📢 Broadcast Announcement", callback_data="adm_broadcast"))
-        markup.add(telebot.types.InlineKeyboardButton("🤝 Toggle Reseller Role", callback_data="adm_toggle_reseller"))
-        markup.add(telebot.types.InlineKeyboardButton("🔨 Ban / Unban User", callback_data="adm_ban_menu"))
-        markup.add(telebot.types.InlineKeyboardButton("💰 Add Balance to User", callback_data="adm_addbal_menu"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text("👑 **MASTER ADMIN PANEL**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        markup.add(telebot.types.InlineKeyboardButton("Users Started List", callback_data="adm_users_list"))
+        markup.add(telebot.types.InlineKeyboardButton("Broadcast Announcement", callback_data="adm_broadcast"))
+        markup.add(telebot.types.InlineKeyboardButton("Toggle Reseller Role", callback_data="adm_toggle_reseller"))
+        markup.add(telebot.types.InlineKeyboardButton("Ban / Unban User", callback_data="adm_ban_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("Add Balance to User", callback_data="adm_addbal_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("Back to Menu", callback_data="main_menu"))
+        bot.edit_message_text("MASTER ADMIN PANEL", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif call.data == "adm_users_list" and is_admin:
         bot.answer_callback_query(call.id)
@@ -697,27 +692,27 @@ def handle_callback(call):
         cursor.close()
         conn.close()
         
-        text = "📋 — **BOT USERS** — 📋\n\n"
+        text = "BOT USERS\n\n"
         for r in rows:
-            text += f"🆔 `{r[0]}` | {r[1]} | 📱 {r[2]} | Role: {r[3]} | 📅 {r[4]}\n\n"
-        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
+            text += f"ID: `{r[0]}` | Name: {r[1]} | Phone: {r[2]} | Role: {r[3]} | Joined: {r[4]}\n\n"
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("Back to Admin", callback_data="admin_panel"))
         bot.edit_message_text(text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "adm_broadcast" and is_admin:
         bot.answer_callback_query(call.id)
         admin_actions[user_id] = "broadcast"
-        bot.send_message(call.message.chat.id, "📢 **Send the announcement message you want to broadcast to all users:**", parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "Send the announcement message you want to broadcast to all users:", parse_mode="Markdown")
 
     elif call.data in ["adm_toggle_reseller", "adm_ban_menu", "adm_addbal_menu"] and is_admin:
         bot.answer_callback_query(call.id)
         actions = {"adm_toggle_reseller": "reseller", "adm_ban_menu": "ban", "adm_addbal_menu": "addbal"}
         admin_actions[user_id] = actions[call.data]
-        bot.send_message(call.message.chat.id, "💬 Send the target User ID (and Amount if adding balance):")
+        bot.send_message(call.message.chat.id, "Send the target User ID (and Amount if adding balance):")
 
 def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, product_name):
     balance = user["balance"]
     if balance >= price_inr:
-        proc_msg = bot.send_message(call.message.chat.id, f"⏳ Contacting Reseller Server for {product_name}...")
+        proc_msg = bot.send_message(call.message.chat.id, f"Contacting Reseller Server for {product_name}...")
         
         user["balance"] -= price_inr
         user["orders_count"] += 1
@@ -766,7 +761,7 @@ def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, 
                 
                 bot.send_message(
                     call.message.chat.id,
-                    f"🎉 **{product_name} Key Generated!**\n\n🔑 Key:\n`{license_key}`\n\n⏱️ Duration: {duration_text}\n💰 Cost: ₹{price_inr}\n💳 Remaining Balance: ₹{user['balance']:.2f}",
+                    f"{product_name} Key Generated!\n\nKey:\n`{license_key}`\n\nDuration: {duration_text}\nCost: ₹{price_inr}\nRemaining Balance: ₹{user['balance']:.2f}",
                     parse_mode="Markdown"
                 )
             else:
@@ -774,7 +769,7 @@ def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, 
                 user["orders_count"] -= 1
                 user["total_spent"] -= price_inr
                 save_user(user)
-                bot.send_message(call.message.chat.id, f"❌ **API Error / Refunded**\nServer response: `{raw_response[:300]}`", parse_mode="Markdown")
+                bot.send_message(call.message.chat.id, f"API Error / Refunded\nServer response: `{raw_response[:300]}`", parse_mode="Markdown")
         except Exception as e:
             try:
                 bot.delete_message(call.message.chat.id, proc_msg.message_id)
@@ -784,15 +779,15 @@ def execute_purchase(call, user_id, user, product_id, duration_text, price_inr, 
             user["orders_count"] -= 1
             user["total_spent"] -= price_inr
             save_user(user)
-            bot.send_message(call.message.chat.id, f"⚠️ Connection Exception, balance refunded: {str(e)}")
+            bot.send_message(call.message.chat.id, f"Connection Exception, balance refunded: {str(e)}")
     else:
         bot.send_message(
             call.message.chat.id,
-            f"❌ **Insufficient Balance!**\nRequired: ₹{price_inr} | Balance: ₹{balance:.2f}\n\nPlease add balance to your wallet.",
+            f"Insufficient Balance!\nRequired: ₹{price_inr} | Balance: ₹{balance:.2f}\n\nPlease add balance to your wallet.",
             parse_mode="Markdown",
             reply_markup=telebot.types.InlineKeyboardMarkup().add(
-                telebot.types.InlineKeyboardButton("💳 Add Balance Now", callback_data="add_balance"),
-                telebot.types.InlineKeyboardButton("🔙 Back to Shop", callback_data="all_products")
+                telebot.types.InlineKeyboardButton("Add Balance Now", callback_data="add_balance"),
+                telebot.types.InlineKeyboardButton("Back to Shop", callback_data="all_products")
             )
         )
 
@@ -813,20 +808,20 @@ def create_topup_order(message_obj, user_id, amount_inr):
             user_orders[user_id] = {"order_id": order_id, "amount": amount_inr}
             
             markup = telebot.types.InlineKeyboardMarkup()
-            markup.add(telebot.types.InlineKeyboardButton("✅ I Have Paid", callback_data="check_topup"))
-            markup.add(telebot.types.InlineKeyboardButton("❌ Cancel Order", callback_data="cancel_topup"))
+            markup.add(telebot.types.InlineKeyboardButton("I Have Paid", callback_data="check_topup"))
+            markup.add(telebot.types.InlineKeyboardButton("Cancel Order", callback_data="cancel_topup"))
             
             caption_text = (
-                f"💳 **Top-Up Order:** ₹{amount_inr}\n"
-                f"🆔 ID: `{order_id}`\n\n"
-                f"🔗 **Payment Link:**\n`{pay_link}`\n\n"
+                f"Top-Up Order: ₹{amount_inr}\n"
+                f"ID: `{order_id}`\n\n"
+                f"Payment Link:\n`{pay_link}`\n\n"
                 f"Scan the QR code or copy the link into your UPI app, then click **I Have Paid**."
             )
             bot.send_photo(chat_id, qr_image_url, caption=caption_text, parse_mode="Markdown", reply_markup=markup)
         else:
-            bot.send_message(chat_id, f"❌ FamAPI Error Response: {res_data}")
+            bot.send_message(chat_id, f"FamAPI Error Response: {res_data}")
     except Exception as e:
-        bot.send_message(chat_id, f"⚠️ Gateway Error: {str(e)}")
+        bot.send_message(chat_id, f"Gateway Error: {str(e)}")
 
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_custom_topup)
 def handle_custom_topup(message):
@@ -836,11 +831,11 @@ def handle_custom_topup(message):
         try:
             amount_inr = int(message.text.strip())
             if amount_inr < 10:
-                bot.send_message(message.chat.id, "❌ Minimum top-up amount is ₹10.")
+                bot.send_message(message.chat.id, "Minimum top-up amount is ₹10.")
                 return
             create_topup_order(message, user_id, amount_inr)
         except ValueError:
-            bot.send_message(message.chat.id, "❌ Invalid amount. Please enter a number.")
+            bot.send_message(message.chat.id, "Invalid amount. Please enter a number.")
 
 @bot.message_handler(func=lambda message: message.from_user.id in admin_actions and message.from_user.id == ADMIN_ID)
 def admin_input(message):
@@ -849,7 +844,7 @@ def admin_input(message):
     text = message.text.strip()
     
     if action == "broadcast":
-        status_msg = bot.send_message(message.chat.id, "⏳ Sending broadcast to all users...")
+        status_msg = bot.send_message(message.chat.id, "Sending broadcast to all users...")
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT user_id FROM users')
@@ -860,12 +855,12 @@ def admin_input(message):
         success_count, fail_count = 0, 0
         for u in all_users:
             try:
-                bot.send_message(u[0], f"📢 **ANNOUNCEMENT**\n\n{text}", parse_mode="Markdown")
+                bot.send_message(u[0], f"ANNOUNCEMENT\n\n{text}", parse_mode="Markdown")
                 success_count += 1
             except Exception:
                 fail_count += 1
                 
-        bot.edit_message_text(f"✅ **Broadcast Completed!**\n\n📤 Successfully sent: {success_count}\n❌ Failed (Blocked): {fail_count}", message.chat.id, status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"Broadcast Completed!\n\nSuccessfully sent: {success_count}\nFailed (Blocked): {fail_count}", message.chat.id, status_msg.message_id, parse_mode="Markdown")
 
     elif action == "reseller":
         try:
@@ -874,11 +869,11 @@ def admin_input(message):
             if target:
                 target["role"] = "Customer" if target["role"] == "Reseller" else "Reseller"
                 save_user(target)
-                bot.send_message(message.chat.id, f"✅ User `{target_id}` role is now **{target['role']}**", parse_mode="Markdown")
+                bot.send_message(message.chat.id, f"User `{target_id}` role is now **{target['role']}**", parse_mode="Markdown")
             else:
-                bot.send_message(message.chat.id, "❌ User not found.")
+                bot.send_message(message.chat.id, "User not found.")
         except Exception:
-            bot.send_message(message.chat.id, "❌ Invalid ID.")
+            bot.send_message(message.chat.id, "Invalid ID.")
     elif action == "ban":
         try:
             target_id = int(text)
@@ -887,11 +882,11 @@ def admin_input(message):
                 target["banned"] = not target["banned"]
                 save_user(target)
                 status = "Banned" if target["banned"] else "Unbanned"
-                bot.send_message(message.chat.id, f"✅ User `{target_id}` status: **{status}**", parse_mode="Markdown")
+                bot.send_message(message.chat.id, f"User `{target_id}` status: **{status}**", parse_package="Markdown")
             else:
-                bot.send_message(message.chat.id, "❌ User not found.")
+                bot.send_message(message.chat.id, "User not found.")
         except Exception:
-            bot.send_message(message.chat.id, "❌ Invalid ID.")
+            bot.send_message(message.chat.id, "Invalid ID.")
     elif action == "addbal":
         try:
             parts = text.split()
@@ -900,11 +895,11 @@ def admin_input(message):
             if target:
                 target["balance"] += amount
                 save_user(target)
-                bot.send_message(message.chat.id, f"✅ Added ₹{amount} to `{target_id}`. New Balance: ₹{target['balance']:.2f}", parse_mode="Markdown")
+                bot.send_message(message.chat.id, f"Added ₹{amount} to `{target_id}`. New Balance: ₹{target['balance']:.2f}", parse_mode="Markdown")
             else:
-                bot.send_message(message.chat.id, "❌ User not found.")
+                bot.send_message(message.chat.id, "User not found.")
         except Exception:
-            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
+            bot.send_message(message.chat.id, "Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Candid Store Bot is fully running with all products and perfection speed!")
+print("Candid Store Bot is running cleanly without IDs and emojis!")
 bot.infinity_polling()
