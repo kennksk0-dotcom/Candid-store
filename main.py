@@ -19,7 +19,7 @@ XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
 # 3. Supabase Cloud Database Connection (Loaded safely from Railway Environment Variables)
-SUPABASE_DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:?NDWDnuZPq8!*7y@db.uujpztqpiqtxcoglbqh.supabase.co:5432/postgres")
+SUPABASE_DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:candidstore1234123@db.uujpztqpiqtxcqoglbqh.supabase.co:5432/postgres")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -667,7 +667,7 @@ def admin_input(message):
             else:
                 bot.send_message(message.chat.id, "❌ User not found.")
         except Exception:
-            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
+            bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mmode="Markdown")
 
-print("Candid Store Cloud Bot is running smoothly...")
+print("Candid Store Bot is running smoothly...")
 bot.infinity_polling()
