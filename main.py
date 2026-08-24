@@ -20,65 +20,81 @@ XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
-# --- MAINTENANCE TOGGLE ---
-STORE_UNDER_MAINTENANCE = False  # Set to True to enable maintenance mode across the store
+# --- GLOBAL TOGGLES & STATES ---
+STORE_UNDER_MAINTENANCE = False
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
 user_cache = {}
-last_purchase_time = {}  # Enhanced anti-hack security tracking
+last_purchase_time = {}
+admin_actions = {}
+user_orders = {}
+waiting_for_custom_topup = {}
+waiting_for_support_ticket = {}
 
 def get_db_connection():
-    return psycopg2.connect(SUPABASE_DB_URL, sslmode='require', connect_timeout=5)
+    return psycopg2.connect(SUPABASE_DB_URL, sslmode='require', connect_timeout=3)
 
 def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            name TEXT,
-            phone TEXT,
-            joined TEXT,
-            balance REAL DEFAULT 0.0,
-            total_spent REAL DEFAULT 0.0,
-            orders_count INTEGER DEFAULT 0,
-            role TEXT DEFAULT 'Customer',
-            banned INTEGER DEFAULT 0,
-            verified INTEGER DEFAULT 0,
-            total_referrals INTEGER DEFAULT 0
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS orders (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            duration TEXT,
-            license_key TEXT,
-            price REAL,
-            date TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS bot_transactions (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            type TEXT,
-            amount REAL,
-            details TEXT,
-            date TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS spam_tracker (
-            user_id BIGINT PRIMARY KEY,
-            abandon_count INTEGER DEFAULT 0,
-            timeout_until TEXT
-        )
-    ''')
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                name TEXT,
+                phone TEXT,
+                joined TEXT,
+                balance REAL DEFAULT 0.0,
+                total_spent REAL DEFAULT 0.0,
+                orders_count INTEGER DEFAULT 0,
+                role TEXT DEFAULT 'Customer',
+                banned INTEGER DEFAULT 0,
+                verified INTEGER DEFAULT 0,
+                total_referrals INTEGER DEFAULT 0
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                duration TEXT,
+                license_key TEXT,
+                price REAL,
+                date TEXT
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS bot_transactions (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                type TEXT,
+                amount REAL,
+                details TEXT,
+                date TEXT
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                message TEXT,
+                status TEXT DEFAULT 'Open',
+                date TEXT
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS spam_tracker (
+                user_id BIGINT PRIMARY KEY,
+                abandon_count INTEGER DEFAULT 0,
+                timeout_until TEXT
+            )
+        ''')
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"DB Init Error: {e}")
 
 init_db()
 
@@ -98,11 +114,16 @@ def log_bot_transaction(user_id, tx_type, amount, details):
         print(f"Error logging bot transaction: {e}")
 
 def get_user(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    if user_id in user_cache:
+        return user_cache[user_id]
+        
     try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
         row = cursor.fetchone()
+        cursor.close()
+        conn.close()
         if row:
             user_data = {
                 "user_id": row["user_id"],
@@ -121,16 +142,13 @@ def get_user(user_id):
             return user_data
     except Exception as e:
         print(f"Error fetching user: {e}")
-    finally:
-        cursor.close()
-        conn.close()
     return None
 
 def save_user(user_data):
     user_cache[user_data["user_id"]] = user_data
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO users (user_id, name, phone, joined, balance, total_spent, orders_count, role, banned, verified, total_referrals)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -150,33 +168,31 @@ def save_user(user_data):
             user_data["role"], int(user_data["banned"]), int(user_data["verified"]), user_data.get("total_referrals", 0)
         ))
         conn.commit()
-    except Exception as e:
-        print(f"Error saving user: {e}")
-    finally:
         cursor.close()
         conn.close()
+    except Exception as e:
+        print(f"Error saving user: {e}")
 
 def check_timeout(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT timeout_until FROM spam_tracker WHERE user_id = %s', (user_id,))
         row = cursor.fetchone()
+        cursor.close()
+        conn.close()
         if row and row[0]:
             timeout_time = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
             if datetime.now() < timeout_time:
                 return int((timeout_time - datetime.now()).total_seconds() / 60)
     except Exception:
         pass
-    finally:
-        cursor.close()
-        conn.close()
     return 0
 
 def add_abandon(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT abandon_count FROM spam_tracker WHERE user_id = %s', (user_id,))
         row = cursor.fetchone()
         count = (row[0] + 1) if row else 1
@@ -190,15 +206,10 @@ def add_abandon(user_id):
             ON CONFLICT (user_id) DO UPDATE SET abandon_count = EXCLUDED.abandon_count, timeout_until = EXCLUDED.timeout_until
         ''', (user_id, count, timeout_until))
         conn.commit()
-    except Exception:
-        pass
-    finally:
         cursor.close()
         conn.close()
-
-user_orders = {}
-waiting_for_custom_topup = {}
-admin_actions = {}
+    except Exception:
+        pass
 
 def get_price(retail_price, panel_price, is_reseller):
     if is_reseller:
@@ -271,22 +282,23 @@ def show_main_menu(chat_id, user_id):
     guest_price = get_price(15, 10, is_res)
     
     welcome_text = (
-        "🎮 **— CHOOSE YOUR GAME —** 🎮\n\n"
-        "✨ **Available Products**\n\n"
-        "💎 Premium Keys\n"
-        "⚡ Instant Delivery\n"
-        "🔒 Secure Payment\n"
-        "📞 24/7 Support\n\n"
-        "🛒 **Select a product below:**"
+        "🟢 **STORE ONLINE | CHOOSE YOUR GAME** 🟢\n\n"
+        "✨ **Available Perks**\n"
+        "💎 Premium Verified Keys\n"
+        "⚡ Lightning Instant Delivery\n"
+        "🔒 Maximum Security & Protection\n"
+        "🎟️ Built-in Support Ticket System\n\n"
+        "🛒 **Select an option below:**"
     )
     
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("🛒 All Products", callback_data="all_products"))
-    markup.add(telebot.types.InlineKeyboardButton(f"🛒 Guest ID 9 Level Accounts - ₹{guest_price}", callback_data="buy_guest_account"))
+    markup.add(telebot.types.InlineKeyboardButton(f"🔥 Guest ID 9 Level Accounts - ₹{guest_price}", callback_data="buy_guest_account"))
     markup.add(telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
                telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders"))
     markup.add(telebot.types.InlineKeyboardButton("🎁 Referral", callback_data="referral"),
                telebot.types.InlineKeyboardButton("👤 Profile", callback_data="profile"))
+    markup.add(telebot.types.InlineKeyboardButton("🎟️ Support Ticket", callback_data="support_ticket"))
     
     if is_admin or user_role == "Reseller":
         welcome_text += f"\n\n⚙️ [{user_role} Dashboard Unlocked]"
@@ -303,19 +315,23 @@ def handle_callback(call):
     user_role = user.get("role", "Customer") if user else "Customer"
     is_res = (user_role == "Reseller" or is_admin)
     
-    maintenance_bypass_actions = ["admin_panel", "adm_users_list", "adm_all_transactions", "adm_check_user", "adm_addbal_menu", "adm_cutbal_menu", "adm_broadcast", "adm_toggle_reseller", "adm_ban_menu", "profile", "orders", "referral", "main_menu"]
+    global STORE_UNDER_MAINTENANCE
+    maintenance_bypass_actions = ["admin_panel", "adm_users_list", "adm_all_transactions", "adm_check_user", "adm_addbal_menu", "adm_cutbal_menu", "adm_broadcast", "adm_toggle_reseller", "adm_ban_menu", "adm_toggle_maintenance", "profile", "orders", "referral", "support_ticket", "main_menu"]
+    
     if STORE_UNDER_MAINTENANCE and not is_admin and call.data not in maintenance_bypass_actions:
         bot.answer_callback_query(call.id, text="Store is under maintenance!", show_alert=True)
         bot.send_message(
             call.message.chat.id, 
-            "🛠️ **STORE UNDER MAINTENANCE** 🛠️\n\nOur store is currently undergoing scheduled maintenance and updates. Please check back shortly!", 
+            "🛠️ **STORE UNDER MAINTENANCE** 🛠️\n\nOur store is currently undergoing scheduled updates. Please check back shortly!", 
             parse_mode="Markdown"
         )
         return
 
-    if call.data in ["all_products", "add_balance", "profile", "orders", "referral", "main_menu", "admin_panel"]:
+    if call.data in ["all_products", "add_balance", "profile", "orders", "referral", "support_ticket", "main_menu", "admin_panel"]:
         if user_id in waiting_for_custom_topup:
             del waiting_for_custom_topup[user_id]
+        if user_id in waiting_for_support_ticket:
+            del waiting_for_support_ticket[user_id]
         if user_id in admin_actions:
             del admin_actions[user_id]
 
@@ -623,10 +639,22 @@ def handle_callback(call):
             "💳 **Available Payment Method:**\n"
             "🇮🇳 Paytm / UPI / QR\n\n"
             "⏱️ *Note: Generated payment QR codes expire in 5 minutes.*\n\n"
-            "✅ **Use balance for instant purchases!**\n\n"
             "👇 **Please reply with the amount in Rupees you want to add (e.g. `100`):**"
         )
         bot.edit_message_text(addbal_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "support_ticket":
+        bot.answer_callback_query(call.id)
+        waiting_for_support_ticket[user_id] = True
+        markup = telebot.types.InlineKeyboardMarkup().add(
+            telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
+        )
+        ticket_text = (
+            "🎟️ **— SUPPORT TICKET SYSTEM —** 🎟️\n\n"
+            "Have an issue with an order, payment, or key? \n\n"
+            "👇 **Type and send your message below, and our administration team will review it instantly:**"
+        )
+        bot.edit_message_text(ticket_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "cancel_topup":
         bot.answer_callback_query(call.id, text="Order cancelled.")
@@ -653,7 +681,7 @@ def handle_callback(call):
             del user_orders[user_id]
             bot.send_message(
                 call.message.chat.id,
-                f"❌ **Your payment QR code for ₹{amount_inr} has expired.**\n\n💬 DM admin for problems.",
+                f"❌ **Your payment QR code for ₹{amount_inr} has expired.**\n\n💬 Use support ticket for help.",
                 parse_mode="Markdown"
             )
             return
@@ -664,21 +692,19 @@ def handle_callback(call):
             if verify.get("status") == "success":
                 user["balance"] += amount_inr
                 save_user(user)
-                
                 log_bot_transaction(user_id, "TOPUP", amount_inr, f"FamPay UPI Topup ID: {order_id}")
                 
                 try:
                     bot.delete_message(call.message.chat.id, order_info["msg_id"])
                 except Exception:
                     pass
-                    
                 del user_orders[user_id]
                 
                 success_text = (
                     "🎉 **PAYMENT SUCCESSFUL!** 🎉\n\n"
                     f"💳 **Added to Wallet:** `₹{amount_inr:.2f}`\n"
                     f"💰 **New Total Balance:** `₹{user['balance']:.2f}`\n\n"
-                    "✨ Thank you for topping up! You can now purchase any product instantly."
+                    "✨ Thank you for topping up!"
                 )
                 bot.send_message(call.message.chat.id, success_text, parse_mode="Markdown")
             else:
@@ -686,19 +712,10 @@ def handle_callback(call):
                     order_info["retry_count"] = 1
                     pending_text = (
                         "⏳ **PAYMENT NOT RECEIVED** ⏳\n\n"
-                        "We have not detected your payment yet. Please ensure the transaction has been completed successfully via your UPI application.\n\n"
-                        "💬 If payment was debited from your account, click try again or contact administration."
+                        "We haven't detected your payment yet. Complete the payment via your UPI app, then click Try Again."
                     )
                     markup = telebot.types.InlineKeyboardMarkup()
                     markup.add(telebot.types.InlineKeyboardButton("🔄 Try Again", callback_data="check_topup"))
-                    admin_username = ""
-                    try:
-                        admin_chat = bot.get_chat(ADMIN_ID)
-                        admin_username = admin_chat.username if admin_chat.username else ""
-                    except Exception:
-                        pass
-                    if admin_username:
-                        markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
                     bot.send_message(call.message.chat.id, pending_text, parse_mode="Markdown", reply_markup=markup)
                 else:
                     try:
@@ -706,38 +723,9 @@ def handle_callback(call):
                     except Exception:
                         pass
                     del user_orders[user_id]
-
-                    failed_text = (
-                        "❌ **PAYMENT UNSUCCESSFUL** ❌\n\n"
-                        "We were unable to verify your payment transaction after multiple attempts.\n\n"
-                        "💬 If your funds were deducted, please contact administration immediately with your payment screenshot."
-                    )
-                    markup = telebot.types.InlineKeyboardMarkup()
-                    admin_username = ""
-                    try:
-                        admin_chat = bot.get_chat(ADMIN_ID)
-                        admin_username = admin_chat.username if admin_chat.username else ""
-                    except Exception:
-                        pass
-                    if admin_username:
-                        markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
-                    bot.send_message(call.message.chat.id, failed_text, parse_mode="Markdown", reply_markup=markup)
-
+                    bot.send_message(call.message.chat.id, "❌ **Payment verification failed.** Please open a support ticket if funds were deducted.", parse_mode="Markdown")
         except Exception:
-            error_text = (
-                "⚠️ **VERIFICATION ERROR** ⚠️\n\n"
-                "We encountered a temporary network issue while verifying your transaction. Please contact administration if the issue persists."
-            )
-            markup = telebot.types.InlineKeyboardMarkup()
-            admin_username = ""
-            try:
-                admin_chat = bot.get_chat(ADMIN_ID)
-                admin_username = admin_chat.username if admin_chat.username else ""
-            except Exception:
-                pass
-            if admin_username:
-                markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
-            bot.send_message(call.message.chat.id, error_text, parse_mode="Markdown", reply_markup=markup)
+            bot.send_message(call.message.chat.id, "⚠️ Network error while verifying payment.", parse_mode="Markdown")
 
     elif call.data == "profile":
         bot.answer_callback_query(call.id)
@@ -761,12 +749,15 @@ def handle_callback(call):
 
     elif call.data == "orders":
         bot.answer_callback_query(call.id)
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = %s', (user_id,))
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = %s', (user_id,))
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+        except Exception:
+            rows = []
         
         if not rows:
             history_text = "📦 You have no past orders."
@@ -786,20 +777,7 @@ def handle_callback(call):
             f"🎁 **REFERRAL PROGRAM**\n\n"
             f"✅ **Status:** ACTIVE\n"
             f"💰 **Earn 20% commission on purchases!**\n\n"
-            f"📊 **YOUR STATS:**\n"
-            f"👥 **Total Referrals:** {user.get('total_referrals', 0)}\n"
-            f"🛒 **Active (Purchased):** 0\n"
-            f"🎁 **Signup Earned:** $0.00 (₹0.00)\n"
-            f"💵 **Commission Earned:** $0.00 (₹0.00)\n"
-            f"📈 **Total Earned:** $0.00 (₹0.00)\n"
-            f"💰 **Available:** $0.00 (₹0.00)\n\n"
-            f"🔗 **Your Referral Link:**\n`{ref_link}`\n\n"
-            f"📱 **How it works:**\n"
-            f"1. Share your link\n"
-            f"2. Friend joins using your link\n"
-            f"3. When they purchase, you earn **20%**!\n"
-            f"4. Exchange to balance or withdraw!\n\n"
-            f"💡 **Example:** Friend buys ₹450.00 → You get ₹90.00"
+            f"🔗 **Your Referral Link:**\n`{ref_link}`"
         )
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.edit_message_text(ref_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
@@ -810,7 +788,10 @@ def handle_callback(call):
 
     elif call.data == "admin_panel" and is_admin:
         bot.answer_callback_query(call.id)
+        m_status = "🔴 OFF (Active)" if not STORE_UNDER_MAINTENANCE else "🟢 ON (Under Maintenance)"
         markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton(f"🛠️ Toggle Maintenance: {m_status}", callback_data="adm_toggle_maintenance"))
+        markup.add(telebot.types.InlineKeyboardButton("🎟️ View Support Tickets", callback_data="adm_view_tickets"))
         markup.add(telebot.types.InlineKeyboardButton("📋 Users Started List", callback_data="adm_users_list"))
         markup.add(telebot.types.InlineKeyboardButton("📊 All Bot Transactions", callback_data="adm_all_transactions"))
         markup.add(telebot.types.InlineKeyboardButton("🔍 Check User Balance & Info", callback_data="adm_check_user"))
@@ -822,14 +803,58 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.edit_message_text("👑 **MASTER ADMIN PANEL**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
+    elif call.data == "adm_toggle_maintenance" and is_admin:
+        STORE_UNDER_MAINTENANCE = not STORE_UNDER_MAINTENANCE
+        bot.answer_callback_query(call.id, text=f"Maintenance mode is now {'ON' if STORE_UNDER_MAINTENANCE else 'OFF'}")
+        
+        m_status = "🔴 OFF (Active)" if not STORE_UNDER_MAINTENANCE else "🟢 ON (Under Maintenance)"
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton(f"🛠️ Toggle Maintenance: {m_status}", callback_data="adm_toggle_maintenance"))
+        markup.add(telebot.types.InlineKeyboardButton("🎟️ View Support Tickets", callback_data="adm_view_tickets"))
+        markup.add(telebot.types.InlineKeyboardButton("📋 Users Started List", callback_data="adm_users_list"))
+        markup.add(telebot.types.InlineKeyboardButton("📊 All Bot Transactions", callback_data="adm_all_transactions"))
+        markup.add(telebot.types.InlineKeyboardButton("🔍 Check User Balance & Info", callback_data="adm_check_user"))
+        markup.add(telebot.types.InlineKeyboardButton("💰 Add Balance to User", callback_data="adm_addbal_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("✂️ Cut Balance from User", callback_data="adm_cutbal_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("📢 Broadcast Announcement", callback_data="adm_broadcast"))
+        markup.add(telebot.types.InlineKeyboardButton("🤝 Toggle Reseller Role", callback_data="adm_toggle_reseller"))
+        markup.add(telebot.types.InlineKeyboardButton("🔨 Ban / Unban User", callback_data="adm_ban_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+        bot.edit_message_text("👑 **MASTER ADMIN PANEL**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "adm_view_tickets" and is_admin:
+        bot.answer_callback_query(call.id)
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, user_id, message, status, date FROM support_tickets ORDER BY id DESC LIMIT 15')
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+        except Exception:
+            rows = []
+
+        if not rows:
+            t_text = "🎟️ **SUPPORT TICKETS**\n\nNo active tickets found."
+        else:
+            t_text = "🎟️ **RECENT SUPPORT TICKETS (Last 15)**\n\n"
+            for r in rows:
+                t_text += f"🆔 Ticket #{r[0]} | User: `{r[1]}`\n📌 Status: **{r[3]}** | 📅 {r[4]}\n💬 Message: {r[2]}\n-------------------\n"
+                
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
+        bot.edit_message_text(t_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
     elif call.data == "adm_users_list" and is_admin:
         bot.answer_callback_query(call.id)
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id, name, phone, role, joined FROM users')
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT user_id, name, phone, role, joined FROM users')
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+        except Exception:
+            rows = []
         
         text = "📋 **— BOT USERS —** 📋\n\n"
         for r in rows:
@@ -839,12 +864,15 @@ def handle_callback(call):
 
     elif call.data == "adm_all_transactions" and is_admin:
         bot.answer_callback_query(call.id)
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id, type, amount, details, date FROM bot_transactions ORDER BY id DESC LIMIT 30')
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT user_id, type, amount, details, date FROM bot_transactions ORDER BY id DESC LIMIT 30')
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+        except Exception:
+            rows = []
 
         if not rows:
             tx_text = "📊 **GLOBAL BOT TRANSACTIONS**\n\nNo transactions recorded yet."
@@ -881,33 +909,18 @@ def handle_callback(call):
             bot.send_message(call.message.chat.id, "💬 Send the target User ID:")
 
 def execute_purchase(call, user_id, product_id, duration_text, price_inr, product_name):
-    # --- HARDENED ANTI-HACK RAPID PURCHASE GUARD (30 SECONDS COOLDOWN) ---
     current_time_epoch = time.time()
     if user_id in last_purchase_time:
-        time_difference = current_time_epoch - last_purchase_time[user_id]
-        if time_difference < 30:
-            admin_username = ""
-            try:
-                admin_chat = bot.get_chat(ADMIN_ID)
-                admin_username = admin_chat.username if admin_chat.username else ""
-            except Exception:
-                pass
-            
-            markup = telebot.types.InlineKeyboardMarkup()
-            if admin_username:
-                markup.add(telebot.types.InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{admin_username}"))
-            
+        if (current_time_epoch - last_purchase_time[user_id]) < 30:
             bot.send_message(
                 call.message.chat.id,
                 "⚠️ **SECURITY ALERT (ANTI-HACK SYSTEM)** ⚠️\n\n"
-                "Suspicious rapid purchasing behavior detected. Multiple consecutive orders are temporarily locked.\n\n"
-                "💬 Please **Contact Admin** for support.",
-                parse_mode="Markdown",
-                reply_markup=markup
+                "Rapid consecutive purchases are temporarily locked.\n\n"
+                "🎟️ Please submit a **Support Ticket** if you need assistance.",
+                parse_mode="Markdown"
             )
             return
 
-    # Fetch live database user record
     fresh_user = get_user(user_id)
     if not fresh_user or fresh_user["balance"] < price_inr:
         current_bal = fresh_user["balance"] if fresh_user else 0.0
@@ -922,10 +935,9 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
         )
         return
 
-    # Update anti-hack cooldown timestamp immediately
     last_purchase_time[user_id] = current_time_epoch
 
-    # STEP 1: STRICT PRE-DEDUCTION BEFORE RESELLER API CALL
+    # Pre-deduction safeguard
     fresh_user["balance"] -= price_inr
     fresh_user["orders_count"] += 1
     fresh_user["total_spent"] += price_inr
@@ -962,19 +974,21 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
             pass
 
         if license_key and "error" not in str(license_key).lower():
-            # SUCCESS: Log global transaction and save order record
             log_bot_transaction(user_id, "PURCHASE", price_inr, f"Bought {product_name} ({duration_text})")
 
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)',
-                (user_id, duration_text, str(license_key), price_inr, current_time)
-            )
-            conn.commit()
-            cursor.close()
-            conn.close()
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)',
+                    (user_id, duration_text, str(license_key), price_inr, current_time)
+                )
+                conn.commit()
+                cursor.close()
+                conn.close()
+            except Exception:
+                pass
             
             bot.send_message(
                 call.message.chat.id,
@@ -982,14 +996,14 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
                 parse_mode="Markdown"
             )
         else:
-            # FAILURE: Automatic atomic refund back to user wallet
+            # Atomic automatic refund on failure
             fresh_user["balance"] += price_inr
             fresh_user["orders_count"] -= 1
             fresh_user["total_spent"] -= price_inr
             save_user(fresh_user)
             bot.send_message(call.message.chat.id, f"❌ **API Error / Purchase Failed (Balance Refunded)**\nServer response: `{raw_response[:300]}`", parse_mode="Markdown")
     except Exception as e:
-        # EXCEPTION: Automatic atomic refund back to user wallet
+        # Atomic automatic refund on exception
         try:
             bot.delete_message(call.message.chat.id, proc_msg.message_id)
         except Exception:
@@ -1014,7 +1028,6 @@ def create_topup_order(message_obj, user_id, amount_inr):
             order_id = res_data["id"]
             pay_link = res_data["payment_link"]
             qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={requests.utils.quote(pay_link)}"
-            
             expires_at = datetime.now() + timedelta(minutes=5)
             
             markup = telebot.types.InlineKeyboardMarkup()
@@ -1026,7 +1039,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
                 f"🆔 ID: `{order_id}`\n\n"
                 f"⏱️ **Expires in:** 5 Minutes\n\n"
                 f"🔗 **Payment Link:**\n`{pay_link}`\n\n"
-                f"Scan the QR code or copy the link into your UPI app, then click **I Have Paid**."
+                f"Scan the QR code or pay via UPI app, then click **I Have Paid**."
             )
             sent_msg = bot.send_photo(chat_id, qr_image_url, caption=caption_text, parse_mode="Markdown", reply_markup=markup)
             
@@ -1039,21 +1052,16 @@ def create_topup_order(message_obj, user_id, amount_inr):
             }
 
             def expire_order(u_id, target_msg_id, target_order_id):
-                time.sleep(300) # 5 minutes
+                time.sleep(300)
                 if u_id in user_orders and user_orders[u_id]["order_id"] == target_order_id:
                     del user_orders[u_id]
                     try:
                         bot.delete_message(chat_id, target_msg_id)
                     except Exception:
                         pass
-                    bot.send_message(
-                        chat_id,
-                        f"❌ **Your payment QR code for ₹{amount_inr} has expired.**\n\n💬 DM admin for problems.",
-                        parse_mode="Markdown"
-                    )
+                    bot.send_message(chat_id, f"❌ **Your payment QR code for ₹{amount_inr} has expired.**", parse_mode="Markdown")
 
             threading.Thread(target=expire_order, args=(user_id, sent_msg.message_id, order_id), daemon=True).start()
-
         else:
             bot.send_message(chat_id, f"❌ FamAPI Error Response: {res_data}")
     except Exception as e:
@@ -1073,6 +1081,43 @@ def handle_custom_topup(message):
         except ValueError:
             bot.send_message(message.chat.id, "❌ Invalid amount. Please enter a number.")
 
+@bot.message_handler(func=lambda message: message.from_user.id in waiting_for_support_ticket)
+def handle_support_ticket_submission(message):
+    user_id = message.from_user.id
+    if user_id in waiting_for_support_ticket:
+        del waiting_for_support_ticket[user_id]
+        ticket_msg = message.text.strip()
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                'INSERT INTO support_tickets (user_id, message, status, date) VALUES (%s, %s, %s, %s)',
+                (user_id, ticket_msg, 'Open', current_time)
+            )
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error saving support ticket: {e}")
+            
+        bot.send_message(
+            message.chat.id,
+            "✅ **Ticket Submitted Successfully!**\n\nOur team has received your support request and will review it shortly. Thank you!",
+            parse_mode="Markdown"
+        )
+        
+        # Notify admin directly
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"🚨 **NEW SUPPORT TICKET RECEIVED**\n\n👤 User ID: `{user_id}`\n💬 Message: {ticket_msg}\n📅 {current_time}",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
 @bot.message_handler(func=lambda message: message.from_user.id in admin_actions and message.from_user.id == ADMIN_ID)
 def admin_input(message):
     admin_id = message.from_user.id
@@ -1081,12 +1126,15 @@ def admin_input(message):
     
     if action == "broadcast":
         status_msg = bot.send_message(message.chat.id, "⏳ Sending broadcast to all users...")
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id FROM users')
-        all_users = cursor.fetchall()
-        cursor.close()
-        conn.close()
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT user_id FROM users')
+            all_users = cursor.fetchall()
+            cursor.close()
+            conn.close()
+        except Exception:
+            all_users = []
         
         success_count, fail_count = 0, 0
         for u in all_users:
@@ -1096,7 +1144,7 @@ def admin_input(message):
             except Exception:
                 fail_count += 1
                 
-        bot.edit_message_text(f"✅ **Broadcast Completed!**\n\n📤 Successfully sent: {success_count}\n❌ Failed (Blocked): {fail_count}", message.chat.id, status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"✅ **Broadcast Completed!**\n\n📤 Successfully sent: {success_count}\n❌ Failed: {fail_count}", message.chat.id, status_msg.message_id, parse_mode="Markdown")
 
     elif action == "reseller":
         try:
@@ -1181,5 +1229,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT` (e.g., `6444009163 50`)", parse_mode="Markdown")
 
-print("Candid Store Bot is running with hardened security & anti-hack protection!")
+print("Candid Store Bot is running fully optimized with Ticket System & Security Protections!")
 bot.infinity_polling()
