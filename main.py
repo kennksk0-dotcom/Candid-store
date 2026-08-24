@@ -1,3 +1,4 @@
+import os
 import telebot
 import requests
 import psycopg2
@@ -17,8 +18,8 @@ XYZ_API_URL = "https://adminpanels.shop/api/reseller_v1.php"
 XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
-# 3. Supabase PostgreSQL Cloud Database URI
-SUPABASE_DB_URL = "postgresql://postgres:?NDWDnuZPq8!*7y@db.uujpztqpiqtxcoglbqh.supabase.co:5432/postgres"
+# 3. Supabase Cloud Database Connection (Loaded safely from Railway Environment Variables)
+SUPABASE_DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:?NDWDnuZPq8!*7y@db.uujpztqpiqtxcoglbqh.supabase.co:5432/postgres")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -184,7 +185,7 @@ def send_welcome(message):
         )
         return
 
-    show_main_menu(message.chat.id, user_id, is_new=True)
+    show_main_menu(message.chat.id, user_id)
 
 @bot.message_handler(content_types=['contact'])
 def handle_contact(message):
@@ -203,9 +204,9 @@ def handle_contact(message):
                 "verified": True, "total_referrals": 0
             })
         bot.send_message(message.chat.id, "✅ **Verification Successful!**", reply_markup=telebot.types.ReplyKeyboardRemove(), parse_mode="Markdown")
-        show_main_menu(message.chat.id, user_id, is_new=True)
+        show_main_menu(message.chat.id, user_id)
 
-def show_main_menu(chat_id, user_id, message_id=None, is_new=False):
+def show_main_menu(chat_id, user_id):
     user = get_user(user_id)
     is_admin = (user_id == ADMIN_ID)
     user_role = user.get("role", "Customer") if user else "Customer"
@@ -229,10 +230,7 @@ def show_main_menu(chat_id, user_id, message_id=None, is_new=False):
     if is_admin:
         markup.add(telebot.types.InlineKeyboardButton("⚡ Master Admin Panel", callback_data="admin_panel"))
         
-    if is_new or not message_id:
-        bot.send_message(chat_id, welcome_text, reply_markup=markup, parse_mode="Markdown")
-    else:
-        bot.edit_message_text(welcome_text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(chat_id, welcome_text, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
@@ -442,7 +440,26 @@ def handle_callback(call):
 
     elif call.data == "main_menu":
         bot.answer_callback_query(call.id)
-        show_main_menu(call.message.chat.id, user_id, message_id=call.message.message_id)
+        user_role = user.get("role", "Customer") if user else "Customer"
+        welcome_text = (
+            "👋 Welcome to Candid Store!\n\n"
+            "🌟 — STORE HIGHLIGHTS — 🌟\n"
+            "🔑 Bala Mod Configs (Instant Key Delivery)\n"
+            "🔒 Secure Automated Checkout"
+        )
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("📦 All Products", callback_data="all_products"))
+        markup.add(telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
+                   telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders"))
+        markup.add(telebot.types.InlineKeyboardButton("🎁 Referral", callback_data="referral"),
+                   telebot.types.InlineKeyboardButton("👑 Profile", callback_data="profile"))
+        
+        if is_admin or user_role == "Reseller":
+            welcome_text += f"\n\n⚙️ [{user_role} Dashboard Unlocked]"
+        if is_admin:
+            markup.add(telebot.types.InlineKeyboardButton("⚡ Master Admin Panel", callback_data="admin_panel"))
+            
+        bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "admin_panel" and is_admin:
         bot.answer_callback_query(call.id)
@@ -652,5 +669,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Candid Store Cloud-Connected Bot with Message Editing is running...")
+print("Candid Store Cloud Bot is running smoothly...")
 bot.infinity_polling()
