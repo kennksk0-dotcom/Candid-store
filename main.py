@@ -26,8 +26,8 @@ SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 STORE_UNDER_MAINTENANCE = False
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Thread-safe connection pool for instant response speeds
-db_pool = pool.ThreadedConnectionPool(1, 20, SUPABASE_DB_URL, sslmode='require', connect_timeout=5)
+# Thread-safe connection pool optimized for speed
+db_pool = pool.ThreadedConnectionPool(2, 30, SUPABASE_DB_URL, sslmode='require', connect_timeout=3)
 
 def get_db_connection():
     return db_pool.getconn()
@@ -139,7 +139,7 @@ def init_db():
         conn.commit()
         cursor.close()
         release_db_connection(conn)
-        print("Database initialized safely with 100% data preservation.")
+        print("Database initialized securely with 100% data preservation.")
     except Exception as e:
         release_db_connection(conn, close=True)
         print(f"DB Init Error: {e}")
@@ -883,7 +883,8 @@ def handle_callback(call):
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        bot.send_message(call.message.chat.id, "❌ **Order has been ❌canceled.**", parse_mode="Markdown")
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+        bot.send_message(call.message.chat.id, "❌ **Order has been ❌canceled.**", parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "profile":
         bot.answer_callback_query(call.id)
@@ -910,7 +911,7 @@ def handle_callback(call):
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = %s', (user_id,))
+            cursor.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT 10', (user_id,))
             rows = cursor.fetchall()
             cursor.close()
             release_db_connection(conn)
@@ -921,7 +922,7 @@ def handle_callback(call):
         if not rows:
             history_text = "📦 You have no past orders."
         else:
-            history_text = "🛍️ **— MY ORDERS —** 🛍️\n\n"
+            history_text = "🛍️ **— MY ORDERS (Last 10) —** 🛍️\n\n"
             for r in rows:
                 history_text += f"🛒 **Product Key**\n⏳ {r[0]}\n🔑 `{r[1]}`\n💰 ₹{r[2]} | 📅 {r[3]}\n-------------------\n"
                 
@@ -1079,18 +1080,19 @@ def handle_callback(call):
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute('SELECT user_id, type, amount, details, date FROM bot_transactions ORDER BY id DESC LIMIT 30')
+            cursor.execute('SELECT user_id, type, amount, details, date FROM bot_transactions ORDER BY id DESC LIMIT 20')
             rows = cursor.fetchall()
             cursor.close()
             release_db_connection(conn)
-        except Exception:
+        except Exception as e:
             release_db_connection(conn, close=True)
             rows = []
+            print(f"Error fetching transactions: {e}")
 
         if not rows:
             tx_text = "📊 **GLOBAL BOT TRANSACTIONS**\n\nNo transactions recorded yet."
         else:
-            tx_text = "📊 **GLOBAL BOT TRANSACTIONS (Last 30)**\n\n"
+            tx_text = "📊 **GLOBAL BOT TRANSACTIONS (Last 20)**\n\n"
             for r in rows:
                 tx_text += f"👤 User: `{r[0]}`\n📌 Type: **{r[1]}** | Amount: `₹{r[2]:.2f}`\n📝 Info: {r[3]}\n📅 {r[4]}\n-------------------\n"
                 
@@ -1205,16 +1207,18 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
                 release_db_connection(conn, close=True)
             
             updated_u = get_user(user_id)
+            markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
             bot.send_message(
                 call.message.chat.id,
                 f"🎉 **{product_name} Key Generated!**\n\n🔑 Key:\n`{license_key}`\n\n⏱️ Duration: {duration_text}\n💰 Cost: ₹{price_inr}\n💳 Remaining Balance: ₹{updated_u['balance']:.2f}",
-                parse_mode="Markdown"
+                parse_mode="Markdown", reply_markup=markup
             )
         else:
             # Refund atomically
             atomic_update_balance(user_id, price_inr, spend_add=-price_inr, order_add=-1)
             log_bot_transaction(user_id, "REFUND", price_inr, f"API Purchase Failed - Refunded for {product_name}")
-            bot.send_message(call.message.chat.id, f"❌ **API Error / Purchase Failed (Balance Refunded)**\nServer response: `{raw_response[:300]}`", parse_mode="Markdown")
+            markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+            bot.send_message(call.message.chat.id, f"❌ **API Error / Purchase Failed (Balance Refunded)**\nServer response: `{raw_response[:300]}`", parse_mode="Markdown", reply_markup=markup)
     except Exception as e:
         try:
             bot.delete_message(call.message.chat.id, proc_msg.message_id)
@@ -1222,7 +1226,8 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
             pass
         atomic_update_balance(user_id, price_inr, spend_add=-price_inr, order_add=-1)
         log_bot_transaction(user_id, "REFUND", price_inr, f"Network Exception - Refunded for {product_name}")
-        bot.send_message(call.message.chat.id, f"⚠️ Connection Exception, balance refunded: {str(e)}")
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+        bot.send_message(call.message.chat.id, f"⚠️ Connection Exception, balance refunded: {str(e)}", reply_markup=markup)
 
 def create_topup_order(message_obj, user_id, amount_inr):
     amount_paise = amount_inr * 100
@@ -1242,6 +1247,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
             
             markup = telebot.types.InlineKeyboardMarkup()
             markup.add(telebot.types.InlineKeyboardButton("❌ Cancel Order", callback_data="cancel_topup"))
+            markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
             
             caption_text = (
                 f"💳 **Top-Up Order:** ₹{amount_inr}\n"
@@ -1283,6 +1289,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
                                 pass
                             
                             updated_usr = get_user(u_id)
+                            success_markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
                             success_text = (
                                 "🎉 **PAYMENT SUCCESSFUL!** 🎉\n\n"
                                 f"🆔 **Order ID:** `{target_order_id}`\n"
@@ -1290,7 +1297,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
                                 f"💰 **New Total Balance:** `₹{updated_usr['balance']:.2f}`\n\n"
                                 "✨ Your payment has been successfully verified and credited to your wallet. Thank you for using our store!"
                             )
-                            bot.send_message(chat_id, success_text, parse_mode="Markdown")
+                            bot.send_message(chat_id, success_text, parse_mode="Markdown", reply_markup=success_markup)
                             break
                     except Exception:
                         pass
@@ -1301,7 +1308,8 @@ def create_topup_order(message_obj, user_id, amount_inr):
                         bot.delete_message(chat_id, msg_id)
                     except Exception:
                         pass
-                    bot.send_message(chat_id, f"❌ **Your payment QR code for ₹{amount_inr} has expired.**", parse_mode="Markdown")
+                    exp_markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+                    bot.send_message(chat_id, f"❌ **Your payment QR code for ₹{amount_inr} has expired.**", parse_mode="Markdown", reply_markup=exp_markup)
 
             threading.Thread(target=poll_payment_status, args=(user_id, order_id, amount_inr, sent_msg.message_id), daemon=True).start()
         else:
@@ -1353,10 +1361,11 @@ def handle_support_ticket_submission(message):
             release_db_connection(conn, close=True)
             print(f"Error saving support ticket: {e}")
             
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.send_message(
             message.chat.id,
             "✅ **Ticket Submitted Successfully!**\n\nOur team has received your support request and will review it shortly.",
-            parse_mode="Markdown"
+            parse_mode="Markdown", reply_markup=markup
         )
         
         try:
@@ -1385,8 +1394,10 @@ def handle_user_coupon_redemption(message):
             cursor.execute('SELECT * FROM coupons WHERE code = %s', (code,))
             coupon = cursor.fetchone()
             
+            markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+
             if not coupon:
-                bot.send_message(message.chat.id, "❌ **Invalid Coupon Code.**", parse_mode="Markdown")
+                bot.send_message(message.chat.id, "❌ **Invalid Coupon Code.**", parse_mode="Markdown", reply_markup=markup)
                 cursor.close()
                 release_db_connection(conn)
                 return
@@ -1394,13 +1405,13 @@ def handle_user_coupon_redemption(message):
             if coupon["expires_at"]:
                 exp_date = datetime.strptime(coupon["expires_at"], "%Y-%m-%d %H:%M:%S")
                 if datetime.now() > exp_date:
-                    bot.send_message(message.chat.id, "❌ **This coupon has expired.**", parse_mode="Markdown")
+                    bot.send_message(message.chat.id, "❌ **This coupon has expired.**", parse_mode="Markdown", reply_markup=markup)
                     cursor.close()
                     release_db_connection(conn)
                     return
 
             if coupon["uses_count"] >= coupon["max_uses"]:
-                bot.send_message(message.chat.id, "❌ **This coupon has reached its maximum global usage limit.**", parse_mode="Markdown")
+                bot.send_message(message.chat.id, "❌ **This coupon has reached its maximum global usage limit.**", parse_mode="Markdown", reply_markup=markup)
                 cursor.close()
                 release_db_connection(conn)
                 return
@@ -1410,7 +1421,7 @@ def handle_user_coupon_redemption(message):
             used_so_far = redemption["used_count"] if redemption else 0
             
             if used_so_far >= coupon["per_user_limit"]:
-                bot.send_message(message.chat.id, "❌ **You have already used this coupon maximum allowed times.**", parse_mode="Markdown")
+                bot.send_message(message.chat.id, "❌ **You have already used this coupon maximum allowed times.**", parse_mode="Markdown", reply_markup=markup)
                 cursor.close()
                 release_db_connection(conn)
                 return
@@ -1438,7 +1449,7 @@ def handle_user_coupon_redemption(message):
             cursor.close()
             release_db_connection(conn)
 
-            bot.send_message(message.chat.id, msg_response, parse_mode="Markdown")
+            bot.send_message(message.chat.id, msg_response, parse_mode="Markdown", reply_markup=markup)
         except Exception as e:
             release_db_connection(conn, close=True)
             bot.send_message(message.chat.id, f"⚠️ Error redeeming coupon: {e}")
@@ -1558,7 +1569,7 @@ def admin_input(message):
                 conn.commit()
                 cur.close()
                 release_db_connection(conn)
-                bot.send_message(message.chat.id, f"✅ User `{target_id}` role is now **{new_role}**", parse_mode="Markdown")
+                bot.send_message(message.chat.id, f"✅ User `{target_id}` role is now **{new_role}**", parse_Mode="Markdown")
             else:
                 bot.send_message(message.chat.id, "❌ User not found.")
         except Exception:
@@ -1640,5 +1651,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Ultimate Store Bot running live with Connection Pooling (Instant Speeds & Zero Balance Risk)!")
+print("Ultimate Store Bot running live with Lightning Speed Optimizations!")
 bot.infinity_polling()
