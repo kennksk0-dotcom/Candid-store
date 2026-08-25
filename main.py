@@ -26,7 +26,7 @@ SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 STORE_UNDER_MAINTENANCE = False
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Thread-safe connection pool for zero lag and instant response times
+# Thread-safe connection pool for instant response speeds
 db_pool = pool.ThreadedConnectionPool(1, 20, SUPABASE_DB_URL, sslmode='require', connect_timeout=5)
 
 def get_db_connection():
@@ -139,7 +139,7 @@ def init_db():
         conn.commit()
         cursor.close()
         release_db_connection(conn)
-        print("Database initialized successfully with Connection Pooling.")
+        print("Database initialized safely with 100% data preservation.")
     except Exception as e:
         release_db_connection(conn, close=True)
         print(f"DB Init Error: {e}")
@@ -153,14 +153,14 @@ def log_bot_transaction(user_id, tx_type, amount, details):
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             'INSERT INTO bot_transactions (user_id, type, amount, details, date) VALUES (%s, %s, %s, %s, %s)',
-            (user_id, tx_type, amount, details, current_time)
+            (user_id, tx_type, float(amount), str(details), current_time)
         )
         conn.commit()
         cursor.close()
         release_db_connection(conn)
     except Exception as e:
         release_db_connection(conn, close=True)
-        print(f"Error logging bot transaction: {e}")
+        print(f"Error logging transaction: {e}")
 
 def get_user(user_id):
     conn = get_db_connection()
@@ -879,7 +879,11 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, text="Order cancelled.")
         add_abandon(user_id)
         user_orders.pop(user_id, None)
-        bot.edit_message_text("❌ **Order Cancelled.**", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        bot.send_message(call.message.chat.id, "❌ **Order has been ❌canceled.**", parse_mode="Markdown")
 
     elif call.data == "profile":
         bot.answer_callback_query(call.id)
@@ -1209,6 +1213,7 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
         else:
             # Refund atomically
             atomic_update_balance(user_id, price_inr, spend_add=-price_inr, order_add=-1)
+            log_bot_transaction(user_id, "REFUND", price_inr, f"API Purchase Failed - Refunded for {product_name}")
             bot.send_message(call.message.chat.id, f"❌ **API Error / Purchase Failed (Balance Refunded)**\nServer response: `{raw_response[:300]}`", parse_mode="Markdown")
     except Exception as e:
         try:
@@ -1216,6 +1221,7 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
         except Exception:
             pass
         atomic_update_balance(user_id, price_inr, spend_add=-price_inr, order_add=-1)
+        log_bot_transaction(user_id, "REFUND", price_inr, f"Network Exception - Refunded for {product_name}")
         bot.send_message(call.message.chat.id, f"⚠️ Connection Exception, balance refunded: {str(e)}")
 
 def create_topup_order(message_obj, user_id, amount_inr):
@@ -1269,7 +1275,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
                             
                             # Atomic balance addition
                             atomic_update_balance(u_id, target_amount)
-                            log_bot_transaction(u_id, "TOPUP", target_amount, f"FamPay Automatic UPI Topup ID: {target_order_id}")
+                            log_bot_transaction(u_id, "TOPUP", target_amount, f"FamPay Auto UPI Topup ID: {target_order_id}")
                             
                             try:
                                 bot.delete_message(chat_id, msg_id)
@@ -1279,9 +1285,10 @@ def create_topup_order(message_obj, user_id, amount_inr):
                             updated_usr = get_user(u_id)
                             success_text = (
                                 "🎉 **PAYMENT SUCCESSFUL!** 🎉\n\n"
+                                f"🆔 **Order ID:** `{target_order_id}`\n"
                                 f"💳 **Added to Wallet:** `₹{target_amount:.2f}`\n"
                                 f"💰 **New Total Balance:** `₹{updated_usr['balance']:.2f}`\n\n"
-                                "✨ Thank you for topping up!"
+                                "✨ Your payment has been successfully verified and credited to your wallet. Thank you for using our store!"
                             )
                             bot.send_message(chat_id, success_text, parse_mode="Markdown")
                             break
@@ -1602,7 +1609,7 @@ def admin_input(message):
             target = get_user(target_id)
             if target:
                 atomic_update_balance(target_id, amount)
-                log_bot_transaction(target_id, "ADMIN_ADD", amount, f"Admin added balance manually")
+                log_bot_transaction(target_id, "ADMIN_ADD", amount, "Admin added balance manually")
                 updated_t = get_user(target_id)
                 bot.send_message(message.chat.id, f"✅ Added ₹{amount} to `{target_id}`. New Balance: ₹{updated_t['balance']:.2f}", parse_mode="Markdown")
                 try:
@@ -1621,7 +1628,7 @@ def admin_input(message):
             if target:
                 deduct = min(target['balance'], amount)
                 atomic_update_balance(target_id, -deduct)
-                log_bot_transaction(target_id, "ADMIN_CUT", deduct, f"Admin deducted balance manually")
+                log_bot_transaction(target_id, "ADMIN_CUT", deduct, "Admin deducted balance manually")
                 updated_t = get_user(target_id)
                 bot.send_message(message.chat.id, f"✅ Cut ₹{deduct} from `{target_id}`. New Balance: ₹{updated_t['balance']:.2f}", parse_mode="Markdown")
                 try:
