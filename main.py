@@ -25,9 +25,22 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
 AI_INSTRUCTION = (
-    "You are CandidStore AI, a fast, helpful, and concise assistant for an online game store. "
-    "Help customers understand game mods, keys, differences between Root and Non-Root, "
-    "and device compatibility. Keep answers brief, friendly, and easy to read."
+    "You are CandidStore AI, the customer assistant for CandidStore.\n"
+    "Available Products in our store:\n"
+    "- Aim Hack FF Nonroot\n"
+    "- Bala Mod Config FF\n"
+    "- Bala Mod V2 FF\n"
+    "- BR Mod PC Version\n"
+    "- BR Mod Root Android\n"
+    "- DripClient Nonroot\n"
+    "- Haxx-Cker Pro Root\n"
+    "- Migul iPhone iOS\n"
+    "- Pato Team Android\n"
+    "- Prime Hook Nonroot\n"
+    "- Silent Cheat Nonroot & Root\n"
+    "- Guest ID 9 Level Accounts\n\n"
+    "Instructions: Answer customer queries politely, concisely, and helpfully. "
+    "Explain differences between Root vs Non-Root and device compatibility clearly without trailing off."
 )
 
 # --- GLOBAL STATES & CONNECTION POOL ---
@@ -427,7 +440,7 @@ def handle_callback(call):
             "Ask me anything about:\n"
             "• Recommended keys for your device\n"
             "• Difference between Root and Non-Root\n"
-            "• Mod features and setup guidance\n\n"
+            "• Available mods, features & pricing\n\n"
             "👇 **Type your question below:**"
         )
         bot.edit_message_text(ai_intro, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
@@ -1196,7 +1209,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Gateway Error: {str(e)}")
 
-# --- AI DIRECT REST HANDLER (gemini-flash-latest) ---
+# --- AI DIRECT REST HANDLER (gemini-flash-latest with full sentence limit) ---
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_ai_prompt)
 def handle_ai_query(message):
     user_id = message.from_user.id
@@ -1216,7 +1229,6 @@ def handle_ai_query(message):
         bot.send_message(message.chat.id, "⚠️ `GEMINI_API_KEY` is not configured in Railway variables.", reply_markup=markup, parse_mode="Markdown")
         return
 
-    # Uses the exact endpoint Google AI Studio designated for your API key
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
     headers = {
         "Content-Type": "application/json",
@@ -1228,19 +1240,19 @@ def handle_ai_query(message):
             {
                 "parts": [
                     {
-                        "text": f"You are CandidStore AI, a fast assistant for a gaming store. Answer briefly: {query_text}"
+                        "text": f"{AI_INSTRUCTION}\n\nCustomer: {query_text}\nAnswer:"
                     }
                 ]
             }
         ],
         "generationConfig": {
-            "maxOutputTokens": 200,
+            "maxOutputTokens": 600,
             "temperature": 0.7
         }
     }
 
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=20)
+        res = requests.post(url, json=payload, headers=headers, timeout=30)
         data = res.json()
 
         reply_text = None
