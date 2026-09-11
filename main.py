@@ -21,21 +21,26 @@ XYZ_API_URL = "https://adminpanels.shop/api/reseller_v1.php"
 XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
-# Reads securely from host environment variable (bypasses GitHub secret scanning)
+# Pull key securely from Railway variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
 # --- CONFIGURE GEMINI AI ---
+AI_INSTRUCTION = (
+    "You are CandidStore AI, a fast, helpful, and concise assistant. "
+    "Help customers understand game mods, keys, differences between Root and Non-Root, "
+    "and device compatibility. Keep your answers brief, friendly, and easy to read."
+)
+
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    ai_model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=(
-            "You are CandidStore AI, a fast, helpful, and concise assistant. "
-            "Help customers understand game mods, keys, differences between Root and Non-Root, "
-            "and device compatibility. Keep your answers brief, friendly, and easy to read."
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        ai_model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash-latest",
+            system_instruction=AI_INSTRUCTION
         )
-    )
+    except Exception:
+        ai_model = None
 else:
     ai_model = None
 
@@ -43,7 +48,6 @@ else:
 STORE_UNDER_MAINTENANCE = False
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Thread-safe connection pool optimized for speed
 db_pool = pool.ThreadedConnectionPool(2, 30, SUPABASE_DB_URL, sslmode='require', connect_timeout=3)
 
 def get_db_connection():
@@ -428,10 +432,6 @@ def handle_callback(call):
 
     if call.data == "open_ai_assistant":
         bot.answer_callback_query(call.id)
-        if not ai_model:
-            bot.send_message(call.message.chat.id, "⚠️ Store AI key is missing. Add GEMINI_API_KEY in your hosting dashboard.")
-            return
-            
         waiting_for_ai_prompt[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
@@ -440,7 +440,7 @@ def handle_callback(call):
             "🤖 **— STORE AI ASSISTANT —** 🤖\n\n"
             "Ask me anything about:\n"
             "• Recommended keys for your device\n"
-            "• Differences between Root and Non-Root\n"
+            "• Difference between Root and Non-Root\n"
             "• Mod features and setup guidance\n\n"
             "👇 **Type your question below:**"
         )
@@ -1052,7 +1052,6 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
 
     last_purchase_time[user_id] = current_time_epoch
 
-    # Atomic deduction
     atomic_update_balance(user_id, -price_inr, spend_add=price_inr, order_add=1)
 
     proc_msg = bot.send_message(call.message.chat.id, f"⏳ Contacting Reseller Server for {product_name}...")
@@ -1110,7 +1109,6 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
                 parse_mode="Markdown", reply_markup=markup
             )
         else:
-            # Refund atomically
             atomic_update_balance(user_id, price_inr, spend_add=-price_inr, order_add=-1)
             log_bot_transaction(user_id, "REFUND", price_inr, f"API Purchase Failed - Refunded for {product_name}")
             markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
@@ -1175,7 +1173,6 @@ def create_topup_order(message_obj, user_id, amount_inr):
                             if not active_order:
                                 break
                             
-                            # Atomic balance addition
                             atomic_update_balance(u_id, target_amount)
                             log_bot_transaction(u_id, "TOPUP", target_amount, f"FamPay Auto UPI Topup ID: {target_order_id}")
                             
@@ -1213,7 +1210,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Gateway Error: {str(e)}")
 
-# --- AI QUERY HANDLER ---
+# --- AI MESSAGE HANDLER WITH AUTO FALLBACK & CLEAN USER ERROR ---
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_ai_prompt)
 def handle_ai_query(message):
     user_id = message.from_user.id
@@ -1224,20 +1221,38 @@ def handle_ai_query(message):
     query_text = message.text.strip()
     bot.send_chat_action(message.chat.id, 'typing')
 
-    if user_id not in ai_chat_sessions:
-        ai_chat_sessions[user_id] = ai_model.start_chat(history=[])
+    models_to_try = [
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+        "gemini-pro"
+    ]
 
-    try:
-        chat = ai_chat_sessions[user_id]
-        response = chat.send_message(query_text)
-        
-        markup = telebot.types.InlineKeyboardMarkup().add(
-            telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
+    response_text = None
+
+    for m_name in models_to_try:
+        try:
+            m = genai.GenerativeModel(model_name=m_name)
+            res = m.generate_content(f"{AI_INSTRUCTION}\n\nUser Question: {query_text}")
+            if res and res.text:
+                response_text = res.text
+                break
+        except Exception:
+            continue
+
+    markup = telebot.types.InlineKeyboardMarkup().add(
+        telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
+    )
+
+    if response_text:
+        bot.send_message(message.chat.id, f"🤖 **AI:**\n\n{response_text}", parse_mode="Markdown", reply_markup=markup)
+    else:
+        # Clean user-facing failure message (no raw API dump)
+        bot.send_message(
+            message.chat.id,
+            "❌ **Failed to get a response from AI. Please try again in a moment.**",
+            parse_mode="Markdown",
+            reply_markup=markup
         )
-        bot.send_message(message.chat.id, f"🤖 **AI:**\n\n{response.text}", parse_mode="Markdown", reply_markup=markup)
-    except Exception as e:
-        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.send_message(message.chat.id, f"⚠️ AI Error: {str(e)}", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_custom_topup)
 def handle_custom_topup(message):
