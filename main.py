@@ -1196,7 +1196,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Gateway Error: {str(e)}")
 
-# --- AI DIRECT REST HANDLER (Optimized for Speed & No Timeout) ---
+# --- AI DIRECT REST HANDLER (gemini-flash-latest) ---
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_ai_prompt)
 def handle_ai_query(message):
     user_id = message.from_user.id
@@ -1216,8 +1216,8 @@ def handle_ai_query(message):
         bot.send_message(message.chat.id, "⚠️ `GEMINI_API_KEY` is not configured in Railway variables.", reply_markup=markup, parse_mode="Markdown")
         return
 
-    # Pass key in both URL and header to guarantee instant Google handshake
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={clean_key}"
+    # Uses the exact endpoint Google AI Studio designated for your API key
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
     headers = {
         "Content-Type": "application/json",
         "X-goog-api-key": clean_key
@@ -1226,8 +1226,11 @@ def handle_ai_query(message):
     payload = {
         "contents": [
             {
-                "role": "user",
-                "parts": [{"text": f"Store Helper: Answer this user question briefly and helpfully: {query_text}"}]
+                "parts": [
+                    {
+                        "text": f"You are CandidStore AI, a fast assistant for a gaming store. Answer briefly: {query_text}"
+                    }
+                ]
             }
         ],
         "generationConfig": {
@@ -1237,7 +1240,7 @@ def handle_ai_query(message):
     }
 
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=12)
+        res = requests.post(url, json=payload, headers=headers, timeout=20)
         data = res.json()
 
         reply_text = None
