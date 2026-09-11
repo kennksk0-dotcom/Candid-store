@@ -20,7 +20,7 @@ XYZ_API_URL = "https://adminpanels.shop/api/reseller_v1.php"
 XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
-# Reads from Railway variables
+# Loaded securely from Railway environment variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
@@ -1212,18 +1212,24 @@ def handle_ai_query(message):
     )
 
     if not GEMINI_API_KEY:
-        bot.send_message(message.chat.id, "❌ AI service is not configured.", reply_markup=markup)
+        bot.send_message(message.chat.id, "⚠️ `GEMINI_API_KEY` is not set in Railway variables.", reply_markup=markup, parse_mode="Markdown")
         return
 
-    # Direct Google AI REST endpoint tailored specifically for this key
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
-    headers = {"Content-Type": "application/json"}
+    # Endpoint from your exact Google AI Studio cURL quickstart
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+    
+    # Exact header required for Google Cloud / AQ API keys
+    headers = {
+        "Content-Type": "application/json",
+        "X-goog-api-key": GEMINI_API_KEY.strip()
+    }
+    
     payload = {
         "contents": [
             {
                 "parts": [
                     {
-                        "text": f"{AI_INSTRUCTION}\n\nCustomer Question: {query_text}"
+                        "text": f"{AI_INSTRUCTION}\n\nCustomer: {query_text}"
                     }
                 ]
             }
@@ -1231,7 +1237,7 @@ def handle_ai_query(message):
     }
 
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=20)
+        res = requests.post(url, json=payload, headers=headers, timeout=25)
         data = res.json()
 
         reply_text = None
@@ -1244,9 +1250,10 @@ def handle_ai_query(message):
         if reply_text:
             bot.send_message(message.chat.id, f"🤖 **AI:**\n\n{reply_text}", parse_mode="Markdown", reply_markup=markup)
         else:
-            bot.send_message(message.chat.id, "❌ Failed to get a response from AI. Please try again in a moment.", parse_mode="Markdown", reply_markup=markup)
-    except Exception:
-        bot.send_message(message.chat.id, "❌ Failed to get a response from AI. Please try again in a moment.", parse_mode="Markdown", reply_markup=markup)
+            err_msg = data.get("error", {}).get("message", str(data)[:200])
+            bot.send_message(message.chat.id, f"⚠️ Google Error: `{err_msg}`", parse_mode="Markdown", reply_markup=markup)
+    except Exception as e:
+        bot.send_message(message.chat.id, f"⚠️ Connection Error: `{str(e)}`", parse_mode="Markdown", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_custom_topup)
 def handle_custom_topup(message):
