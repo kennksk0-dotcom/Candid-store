@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 import threading
 import time
 import random
-import google.generativeai as genai
 
 # --- CONFIGURATION ---
 BOT_TOKEN = "8980753842:AAG05SklWh3TshUWiJio1_MTWo2Net-ijiE"
@@ -21,33 +20,21 @@ XYZ_API_URL = "https://adminpanels.shop/api/reseller_v1.php"
 XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
-# Pull key securely from Railway variables
+# Reads from Railway variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
-# --- CONFIGURE GEMINI AI ---
 AI_INSTRUCTION = (
-    "You are CandidStore AI, a fast, helpful, and concise assistant. "
+    "You are CandidStore AI, a fast, helpful, and concise assistant for an online game store. "
     "Help customers understand game mods, keys, differences between Root and Non-Root, "
-    "and device compatibility. Keep your answers brief, friendly, and easy to read."
+    "and device compatibility. Keep answers brief, friendly, and easy to read."
 )
-
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        ai_model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash-latest",
-            system_instruction=AI_INSTRUCTION
-        )
-    except Exception:
-        ai_model = None
-else:
-    ai_model = None
 
 # --- GLOBAL STATES & CONNECTION POOL ---
 STORE_UNDER_MAINTENANCE = False
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Thread-safe connection pool optimized for speed
 db_pool = pool.ThreadedConnectionPool(2, 30, SUPABASE_DB_URL, sslmode='require', connect_timeout=3)
 
 def get_db_connection():
@@ -70,7 +57,6 @@ waiting_for_custom_topup = {}
 waiting_for_support_ticket = {}
 waiting_for_coupon_code = {}
 waiting_for_ai_prompt = {}
-ai_chat_sessions = {}
 
 def init_db():
     conn = get_db_connection()
@@ -1210,7 +1196,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Gateway Error: {str(e)}")
 
-# --- AI MESSAGE HANDLER WITH AUTO FALLBACK & CLEAN USER ERROR ---
+# --- AI DIRECT REST HANDLER ---
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_ai_prompt)
 def handle_ai_query(message):
     user_id = message.from_user.id
@@ -1221,38 +1207,46 @@ def handle_ai_query(message):
     query_text = message.text.strip()
     bot.send_chat_action(message.chat.id, 'typing')
 
-    models_to_try = [
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash",
-        "gemini-pro"
-    ]
-
-    response_text = None
-
-    for m_name in models_to_try:
-        try:
-            m = genai.GenerativeModel(model_name=m_name)
-            res = m.generate_content(f"{AI_INSTRUCTION}\n\nUser Question: {query_text}")
-            if res and res.text:
-                response_text = res.text
-                break
-        except Exception:
-            continue
-
     markup = telebot.types.InlineKeyboardMarkup().add(
         telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
     )
 
-    if response_text:
-        bot.send_message(message.chat.id, f"🤖 **AI:**\n\n{response_text}", parse_mode="Markdown", reply_markup=markup)
-    else:
-        # Clean user-facing failure message (no raw API dump)
-        bot.send_message(
-            message.chat.id,
-            "❌ **Failed to get a response from AI. Please try again in a moment.**",
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
+    if not GEMINI_API_KEY:
+        bot.send_message(message.chat.id, "❌ AI service is not configured.", reply_markup=markup)
+        return
+
+    # Direct Google AI REST endpoint tailored specifically for this key
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": f"{AI_INSTRUCTION}\n\nCustomer Question: {query_text}"
+                    }
+                ]
+            }
+        ]
+    }
+
+    try:
+        res = requests.post(url, json=payload, headers=headers, timeout=20)
+        data = res.json()
+
+        reply_text = None
+        if "candidates" in data and len(data["candidates"]) > 0:
+            candidate = data["candidates"][0]
+            parts = candidate.get("content", {}).get("parts", [])
+            if parts and "text" in parts[0]:
+                reply_text = parts[0]["text"].strip()
+
+        if reply_text:
+            bot.send_message(message.chat.id, f"🤖 **AI:**\n\n{reply_text}", parse_mode="Markdown", reply_markup=markup)
+        else:
+            bot.send_message(message.chat.id, "❌ Failed to get a response from AI. Please try again in a moment.", parse_mode="Markdown", reply_markup=markup)
+    except Exception:
+        bot.send_message(message.chat.id, "❌ Failed to get a response from AI. Please try again in a moment.", parse_mode="Markdown", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_custom_topup)
 def handle_custom_topup(message):
@@ -1588,5 +1582,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Ultimate Store Bot running live with Store AI and Lightning Speed Optimizations!")
+print("Ultimate Store Bot running live with Direct Gemini REST Engine!")
 bot.infinity_polling()
