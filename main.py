@@ -1196,7 +1196,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Gateway Error: {str(e)}")
 
-# --- AI DIRECT REST HANDLER ---
+# --- AI DIRECT REST HANDLER (Optimized for Speed & No Timeout) ---
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_ai_prompt)
 def handle_ai_query(message):
     user_id = message.from_user.id
@@ -1211,33 +1211,33 @@ def handle_ai_query(message):
         telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
     )
 
-    if not GEMINI_API_KEY:
-        bot.send_message(message.chat.id, "⚠️ `GEMINI_API_KEY` is not set in Railway variables.", reply_markup=markup, parse_mode="Markdown")
+    clean_key = (GEMINI_API_KEY or "").strip()
+    if not clean_key:
+        bot.send_message(message.chat.id, "⚠️ `GEMINI_API_KEY` is not configured in Railway variables.", reply_markup=markup, parse_mode="Markdown")
         return
 
-    # Endpoint from your exact Google AI Studio cURL quickstart
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
-    
-    # Exact header required for Google Cloud / AQ API keys
+    # Pass key in both URL and header to guarantee instant Google handshake
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={clean_key}"
     headers = {
         "Content-Type": "application/json",
-        "X-goog-api-key": GEMINI_API_KEY.strip()
+        "X-goog-api-key": clean_key
     }
     
     payload = {
         "contents": [
             {
-                "parts": [
-                    {
-                        "text": f"{AI_INSTRUCTION}\n\nCustomer: {query_text}"
-                    }
-                ]
+                "role": "user",
+                "parts": [{"text": f"Store Helper: Answer this user question briefly and helpfully: {query_text}"}]
             }
-        ]
+        ],
+        "generationConfig": {
+            "maxOutputTokens": 200,
+            "temperature": 0.7
+        }
     }
 
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=25)
+        res = requests.post(url, json=payload, headers=headers, timeout=12)
         data = res.json()
 
         reply_text = None
@@ -1251,7 +1251,9 @@ def handle_ai_query(message):
             bot.send_message(message.chat.id, f"🤖 **AI:**\n\n{reply_text}", parse_mode="Markdown", reply_markup=markup)
         else:
             err_msg = data.get("error", {}).get("message", str(data)[:200])
-            bot.send_message(message.chat.id, f"⚠️ Google Error: `{err_msg}`", parse_mode="Markdown", reply_markup=markup)
+            bot.send_message(message.chat.id, f"⚠️ Google Response: `{err_msg}`", parse_mode="Markdown", reply_markup=markup)
+    except requests.exceptions.Timeout:
+        bot.send_message(message.chat.id, "⏳ Google took too long to answer. Please send your question again.", reply_markup=markup)
     except Exception as e:
         bot.send_message(message.chat.id, f"⚠️ Connection Error: `{str(e)}`", parse_mode="Markdown", reply_markup=markup)
 
