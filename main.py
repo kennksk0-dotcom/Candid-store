@@ -12,7 +12,14 @@ import string
 import urllib.parse
 import io
 from PIL import Image, ImageEnhance, ImageFilter
-from rembg import remove
+
+try:
+    from rembg import remove
+    REMBG_ENABLED = True
+except Exception as e:
+    remove = None
+    REMBG_ENABLED = False
+    print(f"Warning: rembg engine not loaded: {e}")
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or "8980753842:AAG05SklWh3TshUWiJio1_MTWo2Net-ijiE"
@@ -1687,6 +1694,16 @@ def handle_ai_image_prompt(message):
 def handle_rembg_photo(message):
     uid = message.from_user.id
     waiting_for_rembg_photo.pop(uid, None)
+
+    if not REMBG_ENABLED or remove is None:
+        bot.send_message(
+            message.chat.id,
+            "⚠️ Background remover service is currently initializing or updating. Your balance was not charged.",
+            reply_markup=telebot.types.InlineKeyboardMarkup().add(
+                telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
+            )
+        )
+        return
 
     fresh_user = get_user(uid)
     if not fresh_user or fresh_user["balance"] < REMBG_FEE:
