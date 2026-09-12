@@ -37,8 +37,8 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID") or 7997110885)
 FAMPAY_API_KEY = os.environ.get("FAMPAY_API_KEY") or "FAM_LIVE_sk_hRGdY9XAmPu7wzRg9HXjwa8pHdPhKNGB"
 FAMPAY_BASE_URL = "https://py.freepanel.in/api/v1"
 
-# BANTIBHAIYA RESELLER CONFIG
-BANTI_API_URL = "https://bantibhaiya.com/api/reseller_v1.php"
+# BANTIBHAIYA RESELLER CONFIG (UPDATED TO .TO DOMAIN)
+BANTI_API_URL = os.environ.get("BANTI_API_URL") or "https://bantibhaiya.to/api/reseller_v1.php"
 BANTI_API_KEY = os.environ.get("BANTI_API_KEY") or "8dc220a22ee3ea0ba80340978c2f1248"
 BANTI_MASTER_KEY = os.environ.get("BANTI_MASTER_KEY") or "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
@@ -340,13 +340,6 @@ def init_db():
                 PRIMARY KEY (user_id, code)
             )
         ''')
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS spam_tracker (
-                user_id BIGINT PRIMARY KEY,
-                abandon_count INTEGER DEFAULT 0,
-                timeout_until TEXT
-            )
-        ''')
         conn.commit()
         cur.close()
         print("Database schema successfully verified.")
@@ -441,16 +434,14 @@ def atomic_update_balance(user_id, amount_change, spend_add=0, order_add=0):
     finally:
         release_db_connection(conn)
 
-# --- INSTAGRAM & SOCIAL DIRECT STREAM EXTRACTOR ---
+# --- INSTAGRAM STREAM EXTRACTOR ---
 def fetch_instagram_direct_mp4(url):
     clean_url = url.split("?")[0].strip()
-    
     cobalt_nodes = [
         "https://api.cobalt.tools",
         "https://cobalt-api.kwiatekm.tokyo",
         "https://api.wuk.sh"
     ]
-    
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
@@ -461,7 +452,6 @@ def fetch_instagram_direct_mp4(url):
         "videoQuality": "720",
         "filenameStyle": "basic"
     }
-    
     for node in cobalt_nodes:
         try:
             r = requests.post(f"{node}/api/json", json=payload, headers=headers, timeout=10)
@@ -502,10 +492,9 @@ def fetch_instagram_direct_mp4(url):
                         return nested
         except Exception:
             continue
-
     return None
 
-# --- MAIL.TM FREE DISPOSABLE INBOX ENGINE ---
+# --- MAIL.TM DISPOSABLE ENGINE ---
 def mailtm_get_domain():
     try:
         r = requests.get("https://api.mail.tm/domains", timeout=10)
@@ -632,10 +621,7 @@ def show_main_menu(chat_id, user_id):
         welcome_text += f"\n\n⚙️ [{user_role} Dashboard Unlocked]"
 
     markup = telebot.types.InlineKeyboardMarkup()
-    # Big Full-Width Hero Button: Mod Keys
     markup.add(telebot.types.InlineKeyboardButton("🎮 ALL GAME KEYS CATALOG", callback_data="mods_game_select"))
-    
-    # 2x2 Utility Grid
     markup.add(
         telebot.types.InlineKeyboardButton("📥 Download Videos (Free)", callback_data="open_downloader"),
         telebot.types.InlineKeyboardButton("🚀 Boost Socials", callback_data="smm_main_menu")
@@ -663,7 +649,6 @@ def show_main_menu(chat_id, user_id):
     markup.add(
         telebot.types.InlineKeyboardButton("🏷️ Redeem Coupon", callback_data="redeem_coupon")
     )
-    # Big Full-Width Hero Button: Profile Dashboard
     markup.add(telebot.types.InlineKeyboardButton("👤 FULL PROFILE DASHBOARD", callback_data="profile"))
 
     if is_admin:
@@ -712,7 +697,6 @@ def handle_callback(call):
         admin_actions.pop(user_id, None)
         admin_coupon_flow.pop(user_id, None)
 
-    # 1. NAVIGATION & GAME SELECTION
     if call.data == "main_menu":
         bot.answer_callback_query(call.id)
         show_main_menu(call.message.chat.id, user_id)
@@ -819,7 +803,6 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
         bot.edit_message_text("⚽ **SNAKE SOCCER STARS MODS**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # 2. DURATION PACK PICKER
     elif call.data.startswith("prod_"):
         bot.answer_callback_query(call.id)
         prod_key = call.data.replace("prod_", "")
@@ -838,7 +821,6 @@ def handle_callback(call):
             call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
         )
 
-    # 3. DIRECT PURCHASE HANDLER
     elif call.data.startswith("buykey_"):
         parts = call.data.split("_")
         prod_key = "_".join(parts[1:-1])
@@ -856,7 +838,6 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, text="Processing order...")
         execute_purchase(call, user_id, pid, duration_text, price_inr, product_name)
 
-    # 4. MAINTENANCE MODS POPUP
     elif call.data == "show_maint_list":
         bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
@@ -872,7 +853,6 @@ def handle_callback(call):
             show_alert=True
         )
 
-    # 5. UNIVERSAL VIDEO DOWNLOADER (FREE)
     elif call.data == "open_downloader":
         bot.answer_callback_query(call.id)
         waiting_for_dl_link[user_id] = True
@@ -897,7 +877,6 @@ def handle_callback(call):
         else:
             bot.edit_message_text(dl_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # 6. 100% FREE DISPOSABLE TEMP MAIL
     elif call.data == "temp_mail_menu":
         bot.answer_callback_query(call.id)
         current = user_temp_mails.get(user_id)
@@ -980,7 +959,6 @@ def handle_callback(call):
         else:
             bot.send_message(call.message.chat.id, "❌ Unable to load email content.", reply_markup=markup)
 
-    # 7. SMM BOOSTING SERVICES
     elif call.data == "smm_main_menu":
         bot.answer_callback_query(call.id)
         smm_text = (
@@ -1087,7 +1065,6 @@ def handle_callback(call):
         )
         bot.edit_message_text(prompt_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # 8. AI CREATIVE TOOLS MENUS
     elif call.data == "open_image_gen":
         bot.answer_callback_query(call.id)
         waiting_for_image_prompt[user_id] = True
@@ -1152,7 +1129,6 @@ def handle_callback(call):
         else:
             bot.edit_message_text(enh_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # 9. WALLET TOPUP
     elif call.data == "add_balance":
         bot.answer_callback_query(call.id)
         waiting_for_custom_topup[user_id] = True
@@ -1173,7 +1149,6 @@ def handle_callback(call):
             pass
         bot.send_message(call.message.chat.id, "❌ Top-up canceled.", reply_markup=telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")))
 
-    # 10. USER UTILITIES & EXPANDED BIG PROFILE DASHBOARD
     elif call.data == "profile":
         bot.answer_callback_query(call.id)
         fresh = get_user(user_id)
@@ -1321,13 +1296,12 @@ def handle_callback(call):
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.edit_message_text(
             "🤖 **STORE AI ASSISTANT (Continuous Chat)**\n\n"
-            "Ask me anything about mod keys (Root vs Non-Root vs iOS), boosting packages, or store policies.\n\n"
-            "👇 **Type your questions below:**\n"
-            "*(You can send multiple messages. Tap 'Back to Menu' when finished.)*",
+            "Ask me anything about mod keys, boosting packages, or store policies.\n\n"
+            "👇 **Type your questions below:**",
             call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
         )
 
-    # 11. MASTER ADMIN PANEL
+    # MASTER ADMIN PANEL
     elif call.data == "admin_panel" and is_admin:
         bot.answer_callback_query(call.id)
         m_status = "🔴 OFF (Active)" if not STORE_UNDER_MAINTENANCE else "🟢 ON (Maintenance)"
@@ -1431,7 +1405,7 @@ def handle_callback(call):
         prompt = "Send: `USER_ID AMOUNT`" if act in ["addbal", "cutbal"] else "Send: `USER_ID`"
         bot.send_message(call.message.chat.id, f"💬 {prompt}", parse_mode="Markdown")
 
-# --- RESELLER PURCHASE API DISPATCH ---
+# --- RESELLER PURCHASE API DISPATCH (UPDATED DOMAIN & RELIABILITY) ---
 def execute_purchase(call, user_id, product_id, duration_text, price_inr, product_name):
     fresh_user = get_user(user_id)
     if not fresh_user or fresh_user["balance"] < price_inr:
@@ -1450,6 +1424,7 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
     atomic_update_balance(user_id, -price_inr, spend_add=price_inr, order_add=1)
     proc_msg = bot.send_message(call.message.chat.id, f"⏳ Contacting panel for {product_name}...")
 
+    # Parameters aligned with direct V2 products (no device code required)
     payload = {
         'api_key': BANTI_API_KEY,
         'action': 'buy',
@@ -1458,11 +1433,12 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
     }
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'x-master-key': BANTI_MASTER_KEY
+        'x-master-key': BANTI_MASTER_KEY,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
     }
 
     try:
-        api_res = requests.post(BANTI_API_URL, data=payload, headers=headers, timeout=20)
+        api_res = requests.post(BANTI_API_URL, data=payload, headers=headers, timeout=25)
         raw_resp = api_res.text.strip()
         license_key = None
 
@@ -1679,7 +1655,6 @@ def handle_coupon_input(message):
     finally:
         release_db_connection(conn)
 
-# --- STORE AI ASSISTANT (PERSISTENT CONVERSATION MODE) ---
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_ai_prompt)
 def handle_ai_input(message):
     uid = message.from_user.id
@@ -1723,11 +1698,9 @@ def handle_ai_input(message):
     reply_markup = telebot.types.InlineKeyboardMarkup().add(
         telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
     )
-
     final_text = ans or "Store AI is momentarily busy. Please ask again in a moment!"
     bot.send_message(message.chat.id, final_text, reply_markup=reply_markup)
 
-# --- UNIVERSAL VIDEO DOWNLOADER (HYBRID SCRAPER + MOBILE SPOOFING) ---
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_dl_link)
 def handle_video_download_flow(message):
     uid = message.from_user.id
@@ -1750,7 +1723,6 @@ def handle_video_download_flow(message):
         telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
     )
 
-    # 1. SPECIAL INSTAGRAM PIPELINE (Bypasses Login Gate)
     if "instagram.com" in raw_url:
         direct_url = fetch_instagram_direct_mp4(raw_url)
         if direct_url:
@@ -1783,7 +1755,6 @@ def handle_video_download_flow(message):
         )
         return
 
-    # 2. YOUTUBE, TIKTOK, AND TWITTER (X) PIPELINE
     if not YTDLP_ENABLED or yt_dlp is None:
         bot.send_message(message.chat.id, "⚠️ Downloader engine is updating. Try again in 2 minutes.")
         return
@@ -1842,7 +1813,7 @@ def handle_video_download_flow(message):
             pass
         bot.send_message(message.chat.id, f"⚠️ Download failed: ({str(e)[:85]})")
 
-# --- 1. AI IMAGE GENERATION HANDLER (POLLINATIONS FLUX) ---
+# --- AI IMAGE GENERATION (POLLINATIONS FLUX) ---
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_image_prompt)
 def handle_ai_image_prompt(message):
     uid = message.from_user.id
@@ -1858,10 +1829,7 @@ def handle_ai_image_prompt(message):
         cur_b = fresh_user["balance"] if fresh_user else 0.0
         bot.send_message(
             message.chat.id,
-            f"❌ **Insufficient Balance!**\n"
-            f"Image generation costs: ₹{IMAGE_FEE:.2f}\n"
-            f"Your current balance: ₹{cur_b:.2f}\n\n"
-            "Please top up your wallet to generate custom AI images.",
+            f"❌ **Insufficient Balance!**\nImage generation costs: ₹{IMAGE_FEE:.2f}\nYour balance: ₹{cur_b:.2f}",
             parse_mode="Markdown",
             reply_markup=telebot.types.InlineKeyboardMarkup().add(
                 telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
@@ -1902,23 +1870,14 @@ def handle_ai_image_prompt(message):
             bot.send_photo(
                 message.chat.id,
                 resp.content,
-                caption=(
-                    f"✨ **Prompt:** `{prompt[:150]}`\n"
-                    f"💰 Charged: ₹{IMAGE_FEE:.2f} | 💳 Balance: ₹{u_upd['balance']:.2f}"
-                ),
+                caption=f"✨ **Prompt:** `{prompt[:150]}`\n💰 Charged: ₹{IMAGE_FEE:.2f} | 💳 Balance: ₹{u_upd['balance']:.2f}",
                 parse_mode="Markdown",
                 reply_markup=markup
             )
         else:
             atomic_update_balance(uid, IMAGE_FEE, spend_add=-IMAGE_FEE, order_add=-1)
             log_bot_transaction(uid, "REFUND", IMAGE_FEE, f"Failed image status {resp.status_code}")
-            bot.send_message(
-                message.chat.id,
-                f"⚠️ Server returned error ({resp.status_code}). Your balance has been fully refunded.",
-                reply_markup=telebot.types.InlineKeyboardMarkup().add(
-                    telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
-                )
-            )
+            bot.send_message(message.chat.id, f"⚠️ Server returned error ({resp.status_code}). Balance refunded.")
 
     except Exception as e:
         try:
@@ -1929,20 +1888,14 @@ def handle_ai_image_prompt(message):
         log_bot_transaction(uid, "REFUND", IMAGE_FEE, "Image timeout refund")
         bot.send_message(message.chat.id, f"⚠️ Connection timed out. Balance refunded. Error: {e}")
 
-# --- 2. AI BACKGROUND REMOVER HANDLER (REMBG ENGINE) ---
+# --- AI BACKGROUND REMOVER (REMBG) ---
 @bot.message_handler(content_types=['photo', 'document'], func=lambda m: m.from_user.id in waiting_for_rembg_photo)
 def handle_rembg_photo(message):
     uid = message.from_user.id
     waiting_for_rembg_photo.pop(uid, None)
 
     if not REMBG_ENABLED or remove is None:
-        bot.send_message(
-            message.chat.id,
-            "⚠️ Background remover service is currently initializing or updating. Your balance was not charged.",
-            reply_markup=telebot.types.InlineKeyboardMarkup().add(
-                telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
-            )
-        )
+        bot.send_message(message.chat.id, "⚠️ Background remover service is currently initializing or updating.")
         return
 
     fresh_user = get_user(uid)
@@ -1950,10 +1903,7 @@ def handle_rembg_photo(message):
         cur_b = fresh_user["balance"] if fresh_user else 0.0
         bot.send_message(
             message.chat.id,
-            f"❌ **Insufficient Balance!**\n"
-            f"Background removal costs: ₹{REMBG_FEE:.2f}\n"
-            f"Your current balance: ₹{cur_b:.2f}\n\n"
-            "Please top up your wallet to continue.",
+            f"❌ **Insufficient Balance!**\nBackground removal costs: ₹{REMBG_FEE:.2f}\nBalance: ₹{cur_b:.2f}",
             parse_mode="Markdown",
             reply_markup=telebot.types.InlineKeyboardMarkup().add(
                 telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
@@ -1967,11 +1917,7 @@ def handle_rembg_photo(message):
     bot.send_chat_action(message.chat.id, 'upload_document')
 
     try:
-        if message.content_type == 'photo':
-            file_id = message.photo[-1].file_id
-        else:
-            file_id = message.document.file_id
-
+        file_id = message.photo[-1].file_id if message.content_type == 'photo' else message.document.file_id
         file_info = bot.get_file(file_id)
         downloaded_file = bot.download_file(file_info.file_path)
 
@@ -1991,18 +1937,13 @@ def handle_rembg_photo(message):
             telebot.types.InlineKeyboardButton("✂️ Cutout Another (₹1)", callback_data="open_rembg"),
             telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
         )
-
         bot.send_document(
             message.chat.id,
             output_stream,
-            caption=(
-                "✅ **Background Removed Successfully!**\n"
-                f"💰 Charged: ₹{REMBG_FEE:.2f} | 💳 Balance: ₹{u_upd['balance']:.2f}"
-            ),
+            caption=f"✅ **Background Removed Successfully!**\n💰 Charged: ₹{REMBG_FEE:.2f} | 💳 Balance: ₹{u_upd['balance']:.2f}",
             parse_mode="Markdown",
             reply_markup=markup
         )
-
     except Exception as e:
         try:
             bot.delete_message(message.chat.id, status_msg.message_id)
@@ -2012,7 +1953,7 @@ def handle_rembg_photo(message):
         log_bot_transaction(uid, "REFUND", REMBG_FEE, "BG Remove error refund")
         bot.send_message(message.chat.id, f"⚠️ Failed to process image. Balance refunded. Error: {e}")
 
-# --- 3. AI IMAGE ENHANCER & UPSCALER HANDLER ---
+# --- AI IMAGE ENHANCER & UPSCALER ---
 @bot.message_handler(content_types=['photo', 'document'], func=lambda m: m.from_user.id in waiting_for_enhance_photo)
 def handle_enhance_photo(message):
     uid = message.from_user.id
@@ -2040,13 +1981,10 @@ def handle_enhance_photo(message):
         file_info = bot.get_file(file_id)
         downloaded_file = bot.download_file(file_info.file_path)
 
-        image = Image.open(io.BytesIO(downloaded)).convert("RGB")
+        image = Image.open(io.BytesIO(downloaded_file)).convert("RGB")
         w, h = image.size
 
-        # 2x High-Quality Resampling
         image = image.resize((w * 2, h * 2), Image.Resampling.LANCZOS)
-
-        # Dynamic contrast balance and micro-detail sharpening
         image = ImageEnhance.Contrast(image).enhance(1.15)
         image = ImageEnhance.Color(image).enhance(1.10)
         image = ImageEnhance.Sharpness(image).enhance(1.60)
@@ -2083,7 +2021,7 @@ def handle_enhance_photo(message):
         log_bot_transaction(uid, "REFUND", ENHANCE_FEE, "Enhance error refund")
         bot.send_message(message.chat.id, f"⚠️ Enhancement failed, balance refunded: {e}")
 
-# --- ADMIN COUPON CREATOR ENGINE ---
+# --- ADMIN COUPON BUILDER ---
 @bot.message_handler(func=lambda message: message.from_user.id in admin_coupon_flow and message.from_user.id == ADMIN_ID)
 def admin_coupon_builder(message):
     admin_id = message.from_user.id
@@ -2141,7 +2079,7 @@ def admin_coupon_builder(message):
         except Exception as e:
             bot.send_message(message.chat.id, f"❌ Error: {e}")
 
-# --- FULL ADMIN ACTIONS ---
+# --- ADMIN ACTIONS ---
 @bot.message_handler(func=lambda m: m.from_user.id in admin_actions and m.from_user.id == ADMIN_ID)
 def handle_admin_action(message):
     admin_id = message.from_user.id
