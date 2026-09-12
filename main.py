@@ -11,6 +11,7 @@ import random
 import string
 import urllib.parse
 import io
+import tempfile
 from PIL import Image, ImageEnhance, ImageFilter
 
 try:
@@ -20,6 +21,14 @@ except Exception as e:
     remove = None
     REMBG_ENABLED = False
     print(f"Warning: rembg engine not loaded: {e}")
+
+try:
+    import yt_dlp
+    YTDLP_ENABLED = True
+except Exception as e:
+    yt_dlp = None
+    YTDLP_ENABLED = False
+    print(f"Warning: yt-dlp not loaded: {e}")
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or "8980753842:AAG05SklWh3TshUWiJio1_MTWo2Net-ijiE"
@@ -52,7 +61,8 @@ AI_INSTRUCTION = (
     "You are CandidStore AI, customer assistant for CandidStore.\n"
     "We provide Game Mod Keys (Free Fire, CODM, MLBB, 8 Ball Pool, Carrom Pool, Snake Soccer), "
     "iOS Gbox Certificates, SMM Social Media Boosting (IG Views @ ₹1/1k, TG Members @ ₹35/1k, Likes, Followers), "
-    "AI Image Generation @ ₹2, AI Background Remover @ ₹1, AI Image Enhancer @ ₹1, and 100% Free Disposable Temp Mail.\n"
+    "Free Video Downloader (Insta Reels & YouTube Shorts), AI Image Generation @ ₹2, AI Background Remover @ ₹1, "
+    "AI Image Enhancer @ ₹1, and 100% Free Disposable Temp Mail.\n"
     "Explain Root vs Non-Root vs iOS cleanly and assist with orders."
 )
 
@@ -85,6 +95,7 @@ waiting_for_ai_prompt = {}
 waiting_for_image_prompt = {}
 waiting_for_rembg_photo = {}
 waiting_for_enhance_photo = {}
+waiting_for_dl_link = {}
 user_temp_mails = {}
 waiting_for_smm_link = {}
 
@@ -540,46 +551,60 @@ def show_main_menu(chat_id, user_id):
     user_role = user.get("role", "Customer") if user else "Customer"
 
     welcome_text = (
-        "🟢 **STORE & UTILITIES HUB ONLINE** 🟢\n\n"
-        "✨ **Available Services & Perks**\n"
-        "💎 Instant Delivery of Verified Game Keys\n"
-        "🚀 Social Media Booster (IG Views @ ₹1/1k, TG Members @ ₹35/1k)\n"
-        "🎨 AI Image Generator (Flux 4K @ ₹2)\n"
-        "✂️ AI Background Remover (Cutout @ ₹1)\n"
-        "✨ AI Image Enhancer & Upscaler (4K @ ₹1)\n"
-        "📬 100% Free Disposable Temp Mail Service\n"
-        "🤖 Dual-Core Smart AI Assistant (24/7 Support)\n"
-        "🎟️ Support Tickets & Lucky Spin System\n\n"
-        "🛒 **Select an option below:**"
+        "╔═══════════════════════════════╗\n"
+        "   ⚡ **CANDIDSTORE — MASTER DASHBOARD** ⚡\n"
+        "╚═══════════════════════════════╝\n\n"
+        "🚀 **Instant Delivery Services & Utilities:**\n"
+        "• 🎮 Official Free Fire Mod Keys & Game Packs\n"
+        "• 📥 Free Video Downloader (Insta Reels & YT Shorts)\n"
+        "• 📈 SMM Boosting (Reel Views @ ₹1/1k | TG @ ₹35/1k)\n"
+        "• 🎨 AI Flux 4K Image Generator @ ₹2.00\n"
+        "• ✂️ AI Transparent BG Cutout @ ₹1.00\n"
+        "• ✨ AI 4K Detail Enhancer & Upscaler @ ₹1.00\n"
+        "• 📬 100% Free Unlimited Temp Mail Inboxes\n"
+        "• 🤖 24/7 Dual-Core AI Customer Assistant\n\n"
+        "👇 **Tap an action to begin:**"
     )
     if is_admin or user_role == "Reseller":
         welcome_text += f"\n\n⚙️ [{user_role} Dashboard Unlocked]"
 
     markup = telebot.types.InlineKeyboardMarkup()
+    # Row 1: Primary Gaming Keys (Prominent FF MOD KEYS)
     markup.add(
-        telebot.types.InlineKeyboardButton("🎮 FF MOD KEYS", callback_data="mods_game_select"),
+        telebot.types.InlineKeyboardButton("🎮 FF MOD KEYS", callback_data="game_ff"),
+        telebot.types.InlineKeyboardButton("🕹️ All Games Catalog", callback_data="mods_game_select")
+    )
+    # Row 2: Free Downloader & SMM
+    markup.add(
+        telebot.types.InlineKeyboardButton("📥 Download Videos (Free)", callback_data="open_downloader"),
         telebot.types.InlineKeyboardButton("🚀 Boost Socials", callback_data="smm_main_menu")
     )
+    # Row 3: AI Media Suite
     markup.add(
         telebot.types.InlineKeyboardButton("🎨 AI Image Gen (₹2)", callback_data="open_image_gen"),
         telebot.types.InlineKeyboardButton("✂️ Remove BG (₹1)", callback_data="open_rembg")
     )
+    # Row 4: AI Enhancer & Free Mail
     markup.add(
         telebot.types.InlineKeyboardButton("✨ Enhance / 4K (₹1)", callback_data="open_enhance"),
         telebot.types.InlineKeyboardButton("📬 Temp Mail (Free)", callback_data="temp_mail_menu")
     )
+    # Row 5: Wallet & Smart AI
     markup.add(
-        telebot.types.InlineKeyboardButton("🤖 Ask Store AI", callback_data="open_ai_assistant"),
-        telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance")
+        telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
+        telebot.types.InlineKeyboardButton("🤖 Ask Store AI", callback_data="open_ai_assistant")
     )
+    # Row 6: History & Rewards
     markup.add(
         telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders"),
         telebot.types.InlineKeyboardButton("🎁 Referral", callback_data="referral")
     )
+    # Row 7: Daily Spin & Tickets
     markup.add(
         telebot.types.InlineKeyboardButton("🎡 Lucky Spin", callback_data="lucky_spin"),
         telebot.types.InlineKeyboardButton("🎟️ Support Ticket", callback_data="support_ticket")
     )
+    # Row 8: Coupon & Profile Dashboard
     markup.add(
         telebot.types.InlineKeyboardButton("🏷️ Redeem Coupon", callback_data="redeem_coupon"),
         telebot.types.InlineKeyboardButton("👤 Full Profile Dashboard", callback_data="profile")
@@ -606,7 +631,7 @@ def handle_callback(call):
         "adm_addbal_menu", "adm_cutbal_menu", "adm_broadcast", "adm_toggle_reseller",
         "adm_ban_menu", "adm_toggle_maintenance", "adm_view_tickets", "adm_create_coupon",
         "profile", "orders", "referral", "support_ticket", "main_menu", "open_ai_assistant",
-        "temp_mail_menu", "open_image_gen", "open_rembg", "open_enhance"
+        "temp_mail_menu", "open_image_gen", "open_rembg", "open_enhance", "open_downloader"
     ]
     if STORE_UNDER_MAINTENANCE and not is_admin and call.data not in admin_bypass:
         bot.answer_callback_query(call.id, text="Store under maintenance!", show_alert=True)
@@ -616,7 +641,7 @@ def handle_callback(call):
     if call.data in [
         "mods_game_select", "add_balance", "profile", "orders", "referral", "support_ticket",
         "main_menu", "admin_panel", "lucky_spin", "redeem_coupon", "open_ai_assistant",
-        "temp_mail_menu", "smm_main_menu", "open_image_gen", "open_rembg", "open_enhance"
+        "temp_mail_menu", "smm_main_menu", "open_image_gen", "open_rembg", "open_enhance", "open_downloader"
     ]:
         waiting_for_custom_topup.pop(user_id, None)
         waiting_for_support_ticket.pop(user_id, None)
@@ -625,6 +650,7 @@ def handle_callback(call):
         waiting_for_image_prompt.pop(user_id, None)
         waiting_for_rembg_photo.pop(user_id, None)
         waiting_for_enhance_photo.pop(user_id, None)
+        waiting_for_dl_link.pop(user_id, None)
         waiting_for_smm_link.pop(user_id, None)
         admin_actions.pop(user_id, None)
         admin_coupon_flow.pop(user_id, None)
@@ -655,7 +681,7 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🛡️ Root", callback_data="ff_plat_root"))
         markup.add(telebot.types.InlineKeyboardButton("🍏 iOS (iPhone)", callback_data="ff_plat_ios"))
         markup.add(telebot.types.InlineKeyboardButton("💻 PC Version", callback_data="prod_ff_pc_brmod"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.edit_message_text("🔥 **FREE FIRE — SELECT PLATFORM**\n\nChoose your device setup:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "ff_plat_nr":
@@ -789,7 +815,32 @@ def handle_callback(call):
             show_alert=True
         )
 
-    # 5. 100% FREE DISPOSABLE TEMP MAIL
+    # 5. UNIVERSAL VIDEO DOWNLOADER (FREE)
+    elif call.data == "open_downloader":
+        bot.answer_callback_query(call.id)
+        waiting_for_dl_link[user_id] = True
+        markup = telebot.types.InlineKeyboardMarkup().add(
+            telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
+        )
+        dl_text = (
+            "📥 **UNIVERSAL VIDEO DOWNLOADER**\n\n"
+            "⚡ Supported Platforms:\n"
+            "• **Instagram** (Reels, Videos, Posts)\n"
+            "• **YouTube Shorts** (Clean HD MP4)\n"
+            "• **TikTok & X (Twitter)**\n\n"
+            "💎 **100% Free** | Direct Telegram Delivery\n\n"
+            "👇 **Paste and send your video link below:**"
+        )
+        if call.message.content_type in ['photo', 'video', 'document']:
+            try:
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            except Exception:
+                pass
+            bot.send_message(call.message.chat.id, dl_text, parse_mode="Markdown", reply_markup=markup)
+        else:
+            bot.edit_message_text(dl_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    # 6. 100% FREE DISPOSABLE TEMP MAIL
     elif call.data == "temp_mail_menu":
         bot.answer_callback_query(call.id)
         current = user_temp_mails.get(user_id)
@@ -872,7 +923,7 @@ def handle_callback(call):
         else:
             bot.send_message(call.message.chat.id, "❌ Unable to load email content.", reply_markup=markup)
 
-    # 6. SMM BOOSTING SERVICES
+    # 7. SMM BOOSTING SERVICES
     elif call.data == "smm_main_menu":
         bot.answer_callback_query(call.id)
         smm_text = (
@@ -979,7 +1030,7 @@ def handle_callback(call):
         )
         bot.edit_message_text(prompt_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # 7. AI CREATIVE TOOLS MENUS
+    # 8. AI CREATIVE TOOLS MENUS
     elif call.data == "open_image_gen":
         bot.answer_callback_query(call.id)
         waiting_for_image_prompt[user_id] = True
@@ -1044,7 +1095,7 @@ def handle_callback(call):
         else:
             bot.edit_message_text(enh_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # 8. WALLET TOPUP
+    # 9. WALLET TOPUP
     elif call.data == "add_balance":
         bot.answer_callback_query(call.id)
         waiting_for_custom_topup[user_id] = True
@@ -1065,7 +1116,7 @@ def handle_callback(call):
             pass
         bot.send_message(call.message.chat.id, "❌ Top-up canceled.", reply_markup=telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")))
 
-    # 9. USER UTILITIES & EXPANDED BIG PROFILE DASHBOARD
+    # 10. USER UTILITIES & EXPANDED BIG PROFILE DASHBOARD
     elif call.data == "profile":
         bot.answer_callback_query(call.id)
         fresh = get_user(user_id)
@@ -1073,9 +1124,9 @@ def handle_callback(call):
         status_badge = "🚫 Banned" if fresh["banned"] else "🟢 Verified & Active"
 
         profile_text = (
-            "╔═══════════════════════════╗\n"
+            "╔═══════════════════════════════╗\n"
             "      👤 **USER ACCOUNT DASHBOARD**\n"
-            "╚═══════════════════════════╝\n\n"
+            "╚═══════════════════════════════╝\n\n"
             f"🏷️ **User Tag:** {fresh['name']}\n"
             f"🆔 **Telegram ID:** `{user_id}`\n"
             f"🎖️ **Account Tier:** `{role}`\n"
@@ -1213,7 +1264,7 @@ def handle_callback(call):
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.edit_message_text("🤖 **STORE AI ASSISTANT**\n\n👇 Reply with any question regarding mod keys, root vs non-root, or boosting services:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # 10. MASTER ADMIN PANEL
+    # 11. MASTER ADMIN PANEL
     elif call.data == "admin_panel" and is_admin:
         bot.answer_callback_query(call.id)
         m_status = "🔴 OFF (Active)" if not STORE_UNDER_MAINTENANCE else "🟢 ON (Maintenance)"
@@ -1601,6 +1652,78 @@ def handle_ai_input(message):
 
     bot.send_message(message.chat.id, ans or "Store AI is momentarily busy. Please try again.")
 
+# --- UNIVERSAL VIDEO DOWNLOADER HANDLER (FREE) ---
+@bot.message_handler(func=lambda m: m.from_user.id in waiting_for_dl_link)
+def handle_video_download_flow(message):
+    uid = message.from_user.id
+    waiting_for_dl_link.pop(uid, None)
+    url = message.text.strip()
+
+    if url.startswith("/"):
+        bot.send_message(message.chat.id, "❌ Video download canceled.")
+        return
+
+    if not (url.startswith("http://") or url.startswith("https://")):
+        bot.send_message(message.chat.id, "❌ Please send a valid link starting with `https://`.")
+        return
+
+    if not YTDLP_ENABLED or yt_dlp is None:
+        bot.send_message(message.chat.id, "⚠️ Downloader engine is updating. Please try again in 2 minutes.")
+        return
+
+    status_msg = bot.send_message(message.chat.id, "⏳ Fetching video stream... Please wait a moment.")
+    bot.send_chat_action(message.chat.id, 'upload_video')
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_template = os.path.join(tmpdir, "%(id)s.%(ext)s")
+            ydl_opts = {
+                'outtmpl': out_template,
+                'format': 'best[ext=mp4][filesize<48M]/best[filesize<48M]/best',
+                'quiet': True,
+                'no_warnings': True,
+                'noplaylist': True,
+                'retries': 3
+            }
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                downloaded_file = ydl.prepare_filename(info)
+
+            try:
+                bot.delete_message(message.chat.id, status_msg.message_id)
+            except Exception:
+                pass
+
+            if os.path.exists(downloaded_file):
+                f_size = os.path.getsize(downloaded_file) / (1024 * 1024)
+                if f_size > 49.5:
+                    bot.send_message(message.chat.id, f"⚠️ Video size ({f_size:.1f}MB) exceeds Telegram's 50MB bot upload limit.")
+                    return
+
+                title = info.get('title', 'Downloaded Video')[:70]
+                markup = telebot.types.InlineKeyboardMarkup().add(
+                    telebot.types.InlineKeyboardButton("📥 Download Another", callback_data="open_downloader"),
+                    telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
+                )
+                with open(downloaded_file, 'rb') as vf:
+                    bot.send_video(
+                        message.chat.id,
+                        vf,
+                        caption=f"🎬 **{title}**\n⚡ Downloaded Free via CandidStore",
+                        parse_mode="Markdown",
+                        reply_markup=markup
+                    )
+            else:
+                bot.send_message(message.chat.id, "⚠️ Could not extract downloadable media from this URL.")
+
+    except Exception as e:
+        try:
+            bot.delete_message(message.chat.id, status_msg.message_id)
+        except Exception:
+            pass
+        bot.send_message(message.chat.id, f"⚠️ Download failed. Ensure link is public and under 50MB. ({str(e)[:90]})")
+
 # --- 1. AI IMAGE GENERATION HANDLER (POLLINATIONS FLUX) ---
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_image_prompt)
 def handle_ai_image_prompt(message):
@@ -1642,7 +1765,6 @@ def handle_ai_image_prompt(message):
         image_url = f"https://gen.pollinations.ai/image/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true&key={api_key_clean}"
         resp = requests.get(image_url, timeout=45)
 
-        # Fallback to public endpoint if credits are zero
         if resp.status_code in [401, 402]:
             fallback_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
             resp = requests.get(fallback_url, timeout=45)
