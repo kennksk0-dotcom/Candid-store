@@ -21,6 +21,10 @@ XYZ_API_URL = "https://adminpanels.shop/api/reseller_v1.php"
 XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
+# AAPKA PROVIDER SMM API CONFIG
+AAPKA_API_URL = "https://aapkaprovider.com/api/v2"
+AAPKA_API_KEY = os.environ.get("AAPKA_API_KEY") or "64e5f851a708586e575c1e76719bd653"
+
 # Loaded securely from Railway variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
@@ -40,7 +44,8 @@ AI_INSTRUCTION = (
     "- Pato Team Android\n"
     "- Prime Hook Nonroot\n"
     "- Silent Cheat Nonroot & Root\n"
-    "- Guest ID 9 Level Accounts\n\n"
+    "- Guest ID 9 Level Accounts\n"
+    "- Social Media Boosting (IG Views, Followers, Likes & Telegram Members)\n\n"
     "Instructions: Answer questions politely, concisely, and clearly. "
     "Guide customers about Root vs Non-Root differences and device compatibility."
 )
@@ -49,7 +54,7 @@ AI_INSTRUCTION = (
 STORE_UNDER_MAINTENANCE = False
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Thread-safe connection pool optimized for speed
+# Thread-safe connection pool
 db_pool = pool.ThreadedConnectionPool(2, 30, SUPABASE_DB_URL, sslmode='require', connect_timeout=3)
 
 def get_db_connection():
@@ -73,6 +78,7 @@ waiting_for_support_ticket = {}
 waiting_for_coupon_code = {}
 waiting_for_ai_prompt = {}
 user_temp_mails = {}
+waiting_for_smm_link = {}
 
 def init_db():
     conn = get_db_connection()
@@ -368,6 +374,21 @@ def mailtm_fetch_message_detail(token, msg_id):
     except Exception:
         return None
 
+# --- AAPKA PROVIDER SMM HELPER FUNCTIONS ---
+def smm_place_order(service_id, link, quantity):
+    try:
+        payload = {
+            "key": AAPKA_API_KEY,
+            "action": "add",
+            "service": str(service_id),
+            "link": link.strip(),
+            "quantity": int(quantity)
+        }
+        res = requests.post(AAPKA_API_URL, data=payload, timeout=15)
+        return res.json()
+    except Exception as e:
+        return {"error": str(e)}
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -433,6 +454,7 @@ def show_main_menu(chat_id, user_id):
         "🟢 **STORE & UTILITIES HUB ONLINE** 🟢\n\n"
         "✨ **Available Services & Perks**\n"
         "💎 Verified Keys & Instant Delivery\n"
+        "🚀 Social Media Booster (IG Views @ ₹1/1k, TG Members @ ₹35/1k)\n"
         "📬 Disposable Temp Mail Pass (6h Unlimited)\n"
         "🤖 Dual-Core Smart AI Assistant\n"
         "🎟️ Support Tickets & Lucky Spin System\n\n"
@@ -440,7 +462,8 @@ def show_main_menu(chat_id, user_id):
     )
     
     markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("🛒 All Products", callback_data="all_products"))
+    markup.add(telebot.types.InlineKeyboardButton("🛒 All Products", callback_data="all_products"),
+               telebot.types.InlineKeyboardButton("🚀 Boost Socials", callback_data="smm_main_menu"))
     markup.add(telebot.types.InlineKeyboardButton(f"🔥 Guest ID 9 Level Accounts - ₹{guest_price}", callback_data="buy_guest_account"))
     markup.add(telebot.types.InlineKeyboardButton("📬 Temp Mail Service", callback_data="temp_mail_menu"),
                telebot.types.InlineKeyboardButton("🤖 Ask Store AI", callback_data="open_ai_assistant"))
@@ -478,7 +501,7 @@ def handle_callback(call):
         "admin_panel", "adm_users_list_1", "adm_all_transactions", "adm_check_user", 
         "adm_addbal_menu", "adm_cutbal_menu", "adm_broadcast", "adm_toggle_reseller", 
         "adm_ban_menu", "adm_toggle_maintenance", "adm_view_tickets", "adm_create_coupon",
-        "profile", "orders", "referral", "support_ticket", "main_menu", "open_ai_assistant", "temp_mail_menu"
+        "profile", "orders", "referral", "support_ticket", "main_menu", "open_ai_assistant", "temp_mail_menu", "smm_main_menu"
     ]
     
     if STORE_UNDER_MAINTENANCE and not is_admin and call.data not in maintenance_bypass_actions:
@@ -490,16 +513,125 @@ def handle_callback(call):
         )
         return
 
-    if call.data in ["all_products", "add_balance", "profile", "orders", "referral", "support_ticket", "main_menu", "admin_panel", "lucky_spin", "redeem_coupon", "open_ai_assistant", "temp_mail_menu"]:
+    if call.data in ["all_products", "add_balance", "profile", "orders", "referral", "support_ticket", "main_menu", "admin_panel", "lucky_spin", "redeem_coupon", "open_ai_assistant", "temp_mail_menu", "smm_main_menu"]:
         waiting_for_custom_topup.pop(user_id, None)
         waiting_for_support_ticket.pop(user_id, None)
         waiting_for_coupon_code.pop(user_id, None)
         waiting_for_ai_prompt.pop(user_id, None)
+        waiting_for_smm_link.pop(user_id, None)
         admin_actions.pop(user_id, None)
         admin_coupon_flow.pop(user_id, None)
 
+    # --- SMM BOOSTING HANDLERS ---
+    if call.data == "smm_main_menu":
+        bot.answer_callback_query(call.id)
+        smm_text = (
+            "🚀 **— SOCIAL MEDIA BOOSTING HUB —** 🚀\n\n"
+            "Boost your reach with instant automated delivery:\n\n"
+            "🔥 **Instagram Reel Views** — Only ₹1 / 1,000\n"
+            "👥 **Telegram Members** — Only ₹35 / 1,000 (Non-Drop 30D)\n"
+            "❤️ **Instagram Likes** — Indian Real Accounts\n"
+            "🇮🇳 **Instagram Followers** — 100% Indian Profiles\n\n"
+            "👇 **Choose a service category below:**"
+        )
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("🔥 IG Reel Views (₹1/1k)", callback_data="smm_cat_views"))
+        markup.add(telebot.types.InlineKeyboardButton("👥 TG Channel Members (₹35/1k)", callback_data="smm_cat_tg"))
+        markup.add(telebot.types.InlineKeyboardButton("❤️ IG Indian Likes", callback_data="smm_cat_likes"))
+        markup.add(telebot.types.InlineKeyboardButton("🇮🇳 IG Indian Followers", callback_data="smm_cat_followers"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
+        bot.edit_message_text(smm_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "smm_cat_views":
+        bot.answer_callback_query(call.id)
+        v_text = "🔥 **INSTAGRAM REELS VIEWS** (Service ID: 14686)\n⚡ Ultra-Fast 500k/Day Speed | Instant Start\n\nSelect a pack below:"
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("⚡ 1,000 Views — ₹1", callback_data="smm_buy_14686_1000_1.0_IG_Reel_Views"))
+        markup.add(telebot.types.InlineKeyboardButton("⚡ 5,000 Views — ₹5", callback_data="smm_buy_14686_5000_5.0_IG_Reel_Views"))
+        markup.add(telebot.types.InlineKeyboardButton("⚡ 10,000 Views — ₹10", callback_data="smm_buy_14686_10000_10.0_IG_Reel_Views"))
+        markup.add(telebot.types.InlineKeyboardButton("⚡ 50,000 Views — ₹45", callback_data="smm_buy_14686_50000_45.0_IG_Reel_Views"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
+        bot.edit_message_text(v_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "smm_cat_tg":
+        bot.answer_callback_query(call.id)
+        tg_text = "👥 **TELEGRAM CHANNEL MEMBERS** (Service ID: 14811)\n🛡️ Non-Drop | 30 Days Refill Guarantee | 10k/hr Speed\n\nSelect a pack below:"
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("👥 500 Members — ₹18", callback_data="smm_buy_14811_500_18.0_TG_Members"))
+        markup.add(telebot.types.InlineKeyboardButton("👥 1,000 Members — ₹35", callback_data="smm_buy_14811_1000_35.0_TG_Members"))
+        markup.add(telebot.types.InlineKeyboardButton("👥 2,000 Members — ₹70", callback_data="smm_buy_14811_2000_70.0_TG_Members"))
+        markup.add(telebot.types.InlineKeyboardButton("👥 5,000 Members — ₹170", callback_data="smm_buy_14811_5000_170.0_TG_Members"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
+        bot.edit_message_text(tg_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "smm_cat_likes":
+        bot.answer_callback_query(call.id)
+        lk_text = "❤️ **INSTAGRAM INDIAN LIKES** (Service ID: 14166)\n🇮🇳 100% Indian Profiles | Instant Start | Low Drop\n\nSelect a pack below:"
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("❤️ 100 Likes — ₹3", callback_data="smm_buy_14166_100_3.0_IG_Likes"))
+        markup.add(telebot.types.InlineKeyboardButton("❤️ 500 Likes — ₹12", callback_data="smm_buy_14166_500_12.0_IG_Likes"))
+        markup.add(telebot.types.InlineKeyboardButton("❤️ 1,000 Likes — ₹20", callback_data="smm_buy_14166_1000_20.0_IG_Likes"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
+        bot.edit_message_text(lk_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "smm_cat_followers":
+        bot.answer_callback_query(call.id)
+        fol_text = "🇮🇳 **INSTAGRAM INDIAN FOLLOWERS** (Service ID: 9895)\n🇮🇳 Real Indian Accounts with Posts | 30 Days Refill\n\nSelect a pack below:"
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("🇮🇳 100 Followers — ₹15", callback_data="smm_buy_9895_100_15.0_IG_Followers"))
+        markup.add(telebot.types.InlineKeyboardButton("🇮🇳 500 Followers — ₹65", callback_data="smm_buy_9895_500_65.0_IG_Followers"))
+        markup.add(telebot.types.InlineKeyboardButton("🇮🇳 1,000 Followers — ₹120", callback_data="smm_buy_9895_1000_120.0_IG_Followers"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
+        bot.edit_message_text(fol_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data.startswith("smm_buy_"):
+        bot.answer_callback_query(call.id)
+        parts = call.data.split("_")
+        srv_id = parts[2]
+        qty = int(parts[3])
+        cost = float(parts[4])
+        srv_name = " ".join(parts[5:])
+
+        fresh_user = get_user(user_id)
+        if not fresh_user or fresh_user["balance"] < cost:
+            cur_b = fresh_user["balance"] if fresh_user else 0.0
+            bot.send_message(
+                call.message.chat.id,
+                f"❌ **Insufficient Balance!**\nRequired: ₹{cost:.2f} | Balance: ₹{cur_b:.2f}\n\nPlease add balance to continue.",
+                parse_mode="Markdown",
+                reply_markup=telebot.types.InlineKeyboardMarkup().add(
+                    telebot.types.InlineKeyboardButton("💳 Add Balance Now", callback_data="add_balance"),
+                    telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu")
+                )
+            )
+            return
+
+        waiting_for_smm_link[user_id] = {
+            "service_id": srv_id,
+            "quantity": qty,
+            "cost": cost,
+            "name": srv_name
+        }
+
+        markup = telebot.types.InlineKeyboardMarkup().add(
+            telebot.types.InlineKeyboardButton("🔙 Cancel & Back", callback_data="smm_main_menu")
+        )
+
+        instruction_example = "your Instagram post/reel link" if "Views" in srv_name or "Likes" in srv_name else "your Instagram profile link"
+        if "TG" in srv_name:
+            instruction_example = "your Public Telegram channel link (e.g. `https://t.me/channel`)"
+
+        prompt_text = (
+            f"🛒 **Confirm Order: {srv_name}**\n\n"
+            f"📦 **Quantity:** {qty:,}\n"
+            f"💰 **Total Cost:** ₹{cost:.2f}\n\n"
+            f"👇 **Please reply with {instruction_example}:**\n"
+            "*(Make sure your account/channel is PUBLIC, not private)*"
+        )
+        bot.edit_message_text(prompt_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
     # --- MONETIZED TEMP MAIL SERVICE (₹10 for 6 Hours) ---
-    if call.data == "temp_mail_menu":
+    elif call.data == "temp_mail_menu":
         bot.answer_callback_query(call.id)
         fresh_user = get_user(user_id)
         
@@ -676,7 +808,8 @@ def handle_callback(call):
             "Ask me anything about:\n"
             "• Recommended keys for your device\n"
             "• Difference between Root and Non-Root\n"
-            "• Available mods, features & pricing\n\n"
+            "• Available mods, features & pricing\n"
+            "• Social media booster services\n\n"
             "👇 **Type your question below:**"
         )
         bot.edit_message_text(ai_intro, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
@@ -984,6 +1117,7 @@ def handle_callback(call):
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("💳 Payment Issue", callback_data="tkt_cat_Payment"))
         markup.add(telebot.types.InlineKeyboardButton("🔑 Key Not Delivered / Invalid", callback_data="tkt_cat_Key"))
+        markup.add(telebot.types.InlineKeyboardButton("🚀 SMM / Social Boost Issue", callback_data="tkt_cat_SMM"))
         markup.add(telebot.types.InlineKeyboardButton("🎮 Game / Mod Issue", callback_data="tkt_cat_Game"))
         markup.add(telebot.types.InlineKeyboardButton("⚙️ Reseller Panel Issue", callback_data="tkt_cat_Reseller"))
         markup.add(telebot.types.InlineKeyboardButton("🎁 Referral / Commission Issue", callback_data="tkt_cat_Referral"))
@@ -1053,7 +1187,7 @@ def handle_callback(call):
         else:
             history_text = "🛍️ **— MY ORDERS (Last 10) —** 🛍️\n\n"
             for r in rows:
-                history_text += f"🛒 **Product Key**\n⏳ {r[0]}\n🔑 `{r[1]}`\n💰 ₹{r[2]} | 📅 {r[3]}\n-------------------\n"
+                history_text += f"🛒 **Product Key / Receipt**\n⏳ {r[0]}\n🔑 `{r[1]}`\n💰 ₹{r[2]} | 📅 {r[3]}\n-------------------\n"
                 
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.edit_message_text(history_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
@@ -1442,6 +1576,88 @@ def create_topup_order(message_obj, user_id, amount_inr):
             bot.send_message(chat_id, f"❌ FamAPI Error Response: {res_data}")
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Gateway Error: {str(e)}")
+
+# --- SMM LINK RECEIVER & ORDER DISPATCHER ---
+@bot.message_handler(func=lambda message: message.from_user.id in waiting_for_smm_link)
+def handle_smm_order_submission(message):
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    if user and user["banned"]:
+        return
+
+    order_details = waiting_for_smm_link.pop(user_id, None)
+    if not order_details:
+        return
+
+    target_link = message.text.strip()
+    cost = order_details["cost"]
+    srv_id = order_details["service_id"]
+    qty = order_details["quantity"]
+    srv_name = order_details["name"]
+
+    fresh_user = get_user(user_id)
+    if not fresh_user or fresh_user["balance"] < cost:
+        markup = telebot.types.InlineKeyboardMarkup().add(
+            telebot.types.InlineKeyboardButton("💳 Add Balance Now", callback_data="add_balance"),
+            telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu")
+        )
+        bot.send_message(message.chat.id, f"❌ Insufficient Balance. Required: ₹{cost:.2f}", reply_markup=markup)
+        return
+
+    atomic_update_balance(user_id, -cost, spend_add=cost, order_add=1)
+
+    load_msg = bot.send_message(message.chat.id, f"⏳ Placing order for {qty:,} {srv_name} with provider...")
+    
+    res = smm_place_order(srv_id, target_link, qty)
+    
+    try:
+        bot.delete_message(message.chat.id, load_msg.message_id)
+    except Exception:
+        pass
+
+    markup = telebot.types.InlineKeyboardMarkup().add(
+        telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu")
+    )
+
+    if "order" in res:
+        smm_order_id = res["order"]
+        log_bot_transaction(user_id, "SMM_ORDER", cost, f"SMM Order #{smm_order_id} - {srv_name} ({qty:,})")
+
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                'INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)',
+                (user_id, f"{qty:,} {srv_name}", f"SMM_ORDER_ID_{smm_order_id}", cost, current_time)
+            )
+            conn.commit()
+            cursor.close()
+            release_db_connection(conn)
+        except Exception:
+            release_db_connection(conn, close=True)
+
+        updated_u = get_user(user_id)
+        success_text = (
+            "🎉 **BOOST ORDER PLACED SUCCESSFULLY!** 🎉\n\n"
+            f"🆔 **Order ID:** `{smm_order_id}`\n"
+            f"📌 **Service:** {srv_name}\n"
+            f"📦 **Quantity:** {qty:,}\n"
+            f"🔗 **Target Link:** `{target_link}`\n"
+            f"💰 **Charged:** ₹{cost:.2f}\n"
+            f"💳 **Remaining Balance:** ₹{updated_u['balance']:.2f}\n\n"
+            "⚡ Delivery will start shortly as per provider speed."
+        )
+        bot.send_message(message.chat.id, success_text, parse_mode="Markdown", reply_markup=markup)
+    else:
+        atomic_update_balance(user_id, cost, spend_add=-cost, order_add=-1)
+        err_msg = res.get("error", str(res))
+        log_bot_transaction(user_id, "SMM_REFUND", cost, f"SMM Order Failed - {err_msg}")
+        bot.send_message(
+            message.chat.id,
+            f"❌ **Provider Order Failed (Balance Refunded)**\nReason: `{err_msg}`\n\nPlease check the link format and try again.",
+            parse_mode="Markdown", reply_markup=markup
+        )
 
 # --- AI DUAL-ENGINE HANDLER ---
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_ai_prompt)
@@ -1861,5 +2077,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Ultimate Monetized All-in-One Store & Utilities Bot running live!")
+print("Ultimate All-in-One Store, SMM & Utilities Bot running live!")
 bot.infinity_polling()
