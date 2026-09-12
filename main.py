@@ -30,6 +30,7 @@ AAPKA_API_KEY = os.environ.get("AAPKA_API_KEY") or "64e5f851a708586e575c1e76719b
 # POLLINATIONS AI CONFIG
 POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY") or "sk_T1yQaq7ay5S6l1QdjepQtMh0ak8F1SJi"
 IMAGE_FEE = 2.0  # Cost per image in INR
+VIDEO_FEE = 2.0  # Cost per video in INR
 
 # AI & DB CONFIG
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -40,7 +41,7 @@ AI_INSTRUCTION = (
     "You are CandidStore AI, customer assistant for CandidStore.\n"
     "We provide Game Mod Keys (Free Fire, CODM, MLBB, 8 Ball Pool, Carrom Pool, Snake Soccer), "
     "iOS Gbox Certificates, SMM Social Media Boosting (IG Views @ ₹1/1k, TG Members @ ₹35/1k, Likes, Followers), "
-    "AI Image Generation @ ₹2/image, and 100% Free Disposable Temp Mail.\n"
+    "AI Image & Video Generation @ ₹2 each, and 100% Free Disposable Temp Mail.\n"
     "Explain Root vs Non-Root vs iOS cleanly and assist with orders."
 )
 
@@ -71,6 +72,7 @@ waiting_for_support_ticket = {}
 waiting_for_coupon_code = {}
 waiting_for_ai_prompt = {}
 waiting_for_image_prompt = {}
+waiting_for_video_prompt = {}
 user_temp_mails = {}
 waiting_for_smm_link = {}
 
@@ -530,7 +532,8 @@ def show_main_menu(chat_id, user_id):
         "✨ **Available Services & Perks**\n"
         "💎 Instant Delivery of Verified Game Keys\n"
         "🚀 Social Media Booster (IG Views @ ₹1/1k, TG Members @ ₹35/1k)\n"
-        "🎨 AI Image Generator (Flux 4K @ ₹2/image)\n"
+        "🎨 AI Image Generator (Flux 4K @ ₹2)\n"
+        "🎬 AI Video Generator (Veo HD @ ₹2)\n"
         "📬 100% Free Disposable Temp Mail Service\n"
         "🤖 Dual-Core Smart AI Assistant (24/7 Support)\n"
         "🎟️ Support Tickets & Lucky Spin System\n\n"
@@ -546,24 +549,25 @@ def show_main_menu(chat_id, user_id):
     )
     markup.add(
         telebot.types.InlineKeyboardButton("🎨 AI Image Gen (₹2)", callback_data="open_image_gen"),
-        telebot.types.InlineKeyboardButton("📬 Temp Mail (Free)", callback_data="temp_mail_menu")
+        telebot.types.InlineKeyboardButton("🎬 AI Video Gen (₹2)", callback_data="open_video_gen")
     )
     markup.add(
-        telebot.types.InlineKeyboardButton("🤖 Ask Store AI", callback_data="open_ai_assistant"),
-        telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance")
+        telebot.types.InlineKeyboardButton("📬 Temp Mail (Free)", callback_data="temp_mail_menu"),
+        telebot.types.InlineKeyboardButton("🤖 Ask Store AI", callback_data="open_ai_assistant")
     )
     markup.add(
-        telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders"),
-        telebot.types.InlineKeyboardButton("🎁 Referral", callback_data="referral")
+        telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
+        telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders")
     )
     markup.add(
-        telebot.types.InlineKeyboardButton("🎡 Lucky Spin", callback_data="lucky_spin"),
-        telebot.types.InlineKeyboardButton("🎟️ Support Ticket", callback_data="support_ticket")
+        telebot.types.InlineKeyboardButton("🎁 Referral", callback_data="referral"),
+        telebot.types.InlineKeyboardButton("🎡 Lucky Spin", callback_data="lucky_spin")
     )
     markup.add(
-        telebot.types.InlineKeyboardButton("🏷️ Redeem Coupon", callback_data="redeem_coupon"),
-        telebot.types.InlineKeyboardButton("👤 Profile", callback_data="profile")
+        telebot.types.InlineKeyboardButton("🎟️ Support Ticket", callback_data="support_ticket"),
+        telebot.types.InlineKeyboardButton("🏷️ Redeem Coupon", callback_data="redeem_coupon")
     )
+    markup.add(telebot.types.InlineKeyboardButton("👤 Full Profile Dashboard", callback_data="profile"))
     if is_admin:
         markup.add(telebot.types.InlineKeyboardButton("👑 Master Admin Panel", callback_data="admin_panel"))
 
@@ -585,19 +589,25 @@ def handle_callback(call):
         "admin_panel", "adm_users_list_1", "adm_all_transactions", "adm_check_user",
         "adm_addbal_menu", "adm_cutbal_menu", "adm_broadcast", "adm_toggle_reseller",
         "adm_ban_menu", "adm_toggle_maintenance", "adm_view_tickets", "adm_create_coupon",
-        "profile", "orders", "referral", "support_ticket", "main_menu", "open_ai_assistant", "temp_mail_menu", "open_image_gen"
+        "profile", "orders", "referral", "support_ticket", "main_menu", "open_ai_assistant",
+        "temp_mail_menu", "open_image_gen", "open_video_gen"
     ]
     if STORE_UNDER_MAINTENANCE and not is_admin and call.data not in admin_bypass:
         bot.answer_callback_query(call.id, text="Store under maintenance!", show_alert=True)
         bot.send_message(call.message.chat.id, "🛠️ **STORE UNDER MAINTENANCE**\n\nPlease check back shortly.", parse_mode="Markdown")
         return
 
-    if call.data in ["mods_game_select", "add_balance", "profile", "orders", "referral", "support_ticket", "main_menu", "admin_panel", "lucky_spin", "redeem_coupon", "open_ai_assistant", "temp_mail_menu", "smm_main_menu", "open_image_gen"]:
+    if call.data in [
+        "mods_game_select", "add_balance", "profile", "orders", "referral", "support_ticket",
+        "main_menu", "admin_panel", "lucky_spin", "redeem_coupon", "open_ai_assistant",
+        "temp_mail_menu", "smm_main_menu", "open_image_gen", "open_video_gen"
+    ]:
         waiting_for_custom_topup.pop(user_id, None)
         waiting_for_support_ticket.pop(user_id, None)
         waiting_for_coupon_code.pop(user_id, None)
         waiting_for_ai_prompt.pop(user_id, None)
         waiting_for_image_prompt.pop(user_id, None)
+        waiting_for_video_prompt.pop(user_id, None)
         waiting_for_smm_link.pop(user_id, None)
         admin_actions.pop(user_id, None)
         admin_coupon_flow.pop(user_id, None)
@@ -952,24 +962,51 @@ def handle_callback(call):
         )
         bot.edit_message_text(prompt_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # 7. AI IMAGE GENERATOR
+    # 7. AI IMAGE & VIDEO GENERATOR MENUS (BUG FIX INCLUDED)
     elif call.data == "open_image_gen":
         bot.answer_callback_query(call.id)
         waiting_for_image_prompt[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
         )
-        bot.edit_message_text(
+        text_prompt = (
             f"🎨 **AI IMAGE GENERATOR (FLUX 4K)**\n\n"
             f"⚡ Rate: **₹{IMAGE_FEE:.2f} per generation**\n\n"
-            "Generate esports mascots, gaming thumbnails, custom wallpapers, or anime art styles.\n\n"
+            "Generate esports mascots, gaming thumbnails, wallpapers, or anime characters.\n\n"
             "👇 **Type and reply with your prompt below:**\n"
-            "*(Example: `Cyberpunk futuristic samurai warrior with glowing neon katana, 4k ultra detailed wallpaper`)*",
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown",
-            reply_markup=markup
+            "*(Example: `Cyberpunk futuristic samurai warrior with glowing neon katana, 4k ultra detailed wallpaper`)*"
         )
+        # Fix: Delete photo message if triggered from "Create Another" button
+        if call.message.content_type == 'photo':
+            try:
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            except Exception:
+                pass
+            bot.send_message(call.message.chat.id, text_prompt, parse_mode="Markdown", reply_markup=markup)
+        else:
+            bot.edit_message_text(text_prompt, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "open_video_gen":
+        bot.answer_callback_query(call.id)
+        waiting_for_video_prompt[user_id] = True
+        markup = telebot.types.InlineKeyboardMarkup().add(
+            telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
+        )
+        text_prompt = (
+            f"🎬 **AI VIDEO GENERATOR (VEO HD)**\n\n"
+            f"⚡ Rate: **₹{VIDEO_FEE:.2f} per generation**\n\n"
+            "Generate cinematic 4-second AI videos, gaming clips, and 3D animations.\n\n"
+            "👇 **Type and reply with your prompt below:**\n"
+            "*(Example: `Cinematic drone shot of an ancient neon pagoda at sunset, 4k 60fps`)*"
+        )
+        if call.message.content_type in ['video', 'photo']:
+            try:
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            except Exception:
+                pass
+            bot.send_message(call.message.chat.id, text_prompt, parse_mode="Markdown", reply_markup=markup)
+        else:
+            bot.edit_message_text(text_prompt, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     # 8. WALLET TOPUP
     elif call.data == "add_balance":
@@ -992,18 +1029,52 @@ def handle_callback(call):
             pass
         bot.send_message(call.message.chat.id, "❌ Top-up canceled.", reply_markup=telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")))
 
-    # 9. USER UTILITIES & MENUS
+    # 9. USER UTILITIES & EXPANDED BIG PROFILE DASHBOARD
     elif call.data == "profile":
         bot.answer_callback_query(call.id)
         fresh = get_user(user_id)
-        role = "👑 Admin" if is_admin else f"👤 {fresh['role']}"
-        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text(
-            f"👤 **— YOUR PROFILE —** 👤\n\n🆔 ID: `{user_id}`\n🔥 Name: {fresh['name']}\n👑 Account: {role}\n\n"
-            f"💳 Balance: ₹{fresh['balance']:.2f}\n📦 Orders: {fresh['orders_count']}\n💸 Spent: ₹{fresh['total_spent']:.2f}\n"
-            f"👥 Referrals: {fresh.get('total_referrals', 0)}\n📅 Joined: {fresh['joined']}",
-            call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
+        role = "👑 Master Admin" if is_admin else f"👤 {fresh['role']}"
+        status_badge = "🚫 Banned" if fresh["banned"] else "🟢 Verified & Active"
+
+        profile_text = (
+            "╔═══════════════════════════╗\n"
+            "      👤 **USER ACCOUNT DASHBOARD**\n"
+            "╚═══════════════════════════╝\n\n"
+            f"🏷️ **User Tag:** {fresh['name']}\n"
+            f"🆔 **Telegram ID:** `{user_id}`\n"
+            f"🎖️ **Account Tier:** `{role}`\n"
+            f"🛡️ **Account Status:** {status_badge}\n"
+            f"📅 **Member Since:** `{fresh['joined']}`\n\n"
+            "┌─── 💳 **WALLET & SPENDING** ────────┐\n"
+            f"│ 💰 **Current Balance:** ₹{fresh['balance']:.2f}\n"
+            f"│ 💸 **Lifetime Spent:**  ₹{fresh['total_spent']:.2f}\n"
+            f"│ 📦 **Orders Completed:** {fresh['orders_count']}\n"
+            "└────────────────────────────────┘\n\n"
+            "┌─── 🎁 **REWARDS & BONUSES** ────────┐\n"
+            f"│ 👥 **Total Referrals:** {fresh.get('total_referrals', 0)}\n"
+            f"│ 🎡 **Bonus Spins Bank:** {fresh.get('bonus_spins', 0)}\n"
+            f"│ ⏱️ **Last Daily Spin:**  `{fresh.get('last_spin_time') or 'Available Now'}`\n"
+            "└────────────────────────────────┘"
         )
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(
+            telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
+            telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders")
+        )
+        markup.add(
+            telebot.types.InlineKeyboardButton("🎡 Lucky Spin", callback_data="lucky_spin"),
+            telebot.types.InlineKeyboardButton("🎁 Refer Friends", callback_data="referral")
+        )
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
+
+        if call.message.content_type in ['photo', 'video']:
+            try:
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            except Exception:
+                pass
+            bot.send_message(call.message.chat.id, profile_text, parse_mode="Markdown", reply_markup=markup)
+        else:
+            bot.edit_message_text(profile_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "orders":
         bot.answer_callback_query(call.id)
@@ -1494,7 +1565,7 @@ def handle_ai_input(message):
 
     bot.send_message(message.chat.id, ans or "Store AI is momentarily busy. Please try again.")
 
-# --- AI IMAGE GENERATION HANDLER (POLLINATIONS V0.3 GEN API) ---
+# --- AI IMAGE GENERATION HANDLER ---
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_image_prompt)
 def handle_ai_image_prompt(message):
     uid = message.from_user.id
@@ -1528,12 +1599,14 @@ def handle_ai_image_prompt(message):
 
     try:
         encoded_prompt = urllib.parse.quote(prompt)
-        image_url = f"https://gen.pollinations.ai/image/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true"
-        headers = {
-            "Authorization": f"Bearer {POLLINATIONS_API_KEY.strip()}"
-        }
+        api_key_clean = (POLLINATIONS_API_KEY or "").strip()
 
-        resp = requests.get(image_url, headers=headers, timeout=45)
+        if api_key_clean and not api_key_clean.endswith("_REPLACE_WITH_FULL_KEY"):
+            image_url = f"https://gen.pollinations.ai/image/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true&key={api_key_clean}"
+            resp = requests.get(image_url, timeout=45)
+        else:
+            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+            resp = requests.get(image_url, timeout=45)
 
         try:
             bot.delete_message(message.chat.id, status_msg.message_id)
@@ -1576,6 +1649,90 @@ def handle_ai_image_prompt(message):
         atomic_update_balance(uid, IMAGE_FEE, spend_add=-IMAGE_FEE, order_add=-1)
         log_bot_transaction(uid, "REFUND", IMAGE_FEE, "Image timeout refund")
         bot.send_message(message.chat.id, f"⚠️ Connection timed out. Balance refunded. Error: {e}")
+
+# --- AI VIDEO GENERATION HANDLER ---
+@bot.message_handler(func=lambda m: m.from_user.id in waiting_for_video_prompt)
+def handle_ai_video_prompt(message):
+    uid = message.from_user.id
+    waiting_for_video_prompt.pop(uid, None)
+    prompt = message.text.strip()
+
+    if prompt.startswith("/"):
+        bot.send_message(message.chat.id, "❌ Video generation canceled.")
+        return
+
+    fresh_user = get_user(uid)
+    if not fresh_user or fresh_user["balance"] < VIDEO_FEE:
+        cur_b = fresh_user["balance"] if fresh_user else 0.0
+        bot.send_message(
+            message.chat.id,
+            f"❌ **Insufficient Balance!**\n"
+            f"Video generation costs: ₹{VIDEO_FEE:.2f}\n"
+            f"Your current balance: ₹{cur_b:.2f}\n\n"
+            "Please top up your wallet to generate AI video clips.",
+            parse_mode="Markdown",
+            reply_markup=telebot.types.InlineKeyboardMarkup().add(
+                telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
+                telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
+            )
+        )
+        return
+
+    atomic_update_balance(uid, -VIDEO_FEE, spend_add=VIDEO_FEE, order_add=1)
+    status_msg = bot.send_message(message.chat.id, f"🎬 Rendering AI video clip (₹{VIDEO_FEE:.2f} deducted)... This takes ~30-60s.")
+    bot.send_chat_action(message.chat.id, 'upload_video')
+
+    try:
+        encoded_prompt = urllib.parse.quote(prompt)
+        api_key_clean = (POLLINATIONS_API_KEY or "").strip()
+
+        video_url = f"https://gen.pollinations.ai/video/{encoded_prompt}?model=veo&duration=4"
+        if api_key_clean and not api_key_clean.endswith("_REPLACE_WITH_FULL_KEY"):
+            video_url += f"&key={api_key_clean}"
+
+        resp = requests.get(video_url, timeout=90)
+
+        try:
+            bot.delete_message(message.chat.id, status_msg.message_id)
+        except Exception:
+            pass
+
+        if resp.status_code == 200:
+            log_bot_transaction(uid, "AI_VIDEO", VIDEO_FEE, f"Generated: {prompt[:40]}")
+            u_upd = get_user(uid)
+            markup = telebot.types.InlineKeyboardMarkup().add(
+                telebot.types.InlineKeyboardButton("🎬 Create Another (₹2)", callback_data="open_video_gen"),
+                telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
+            )
+            bot.send_video(
+                message.chat.id,
+                resp.content,
+                caption=(
+                    f"🎬 **Prompt:** `{prompt[:150]}`\n"
+                    f"💰 Charged: ₹{VIDEO_FEE:.2f} | 💳 Balance: ₹{u_upd['balance']:.2f}"
+                ),
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+        else:
+            atomic_update_balance(uid, VIDEO_FEE, spend_add=-VIDEO_FEE, order_add=-1)
+            log_bot_transaction(uid, "REFUND", VIDEO_FEE, f"Failed video status {resp.status_code}")
+            bot.send_message(
+                message.chat.id,
+                f"⚠️ Video render error ({resp.status_code}). Your balance has been fully refunded.",
+                reply_markup=telebot.types.InlineKeyboardMarkup().add(
+                    telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
+                )
+            )
+
+    except Exception as e:
+        try:
+            bot.delete_message(message.chat.id, status_msg.message_id)
+        except Exception:
+            pass
+        atomic_update_balance(uid, VIDEO_FEE, spend_add=-VIDEO_FEE, order_add=-1)
+        log_bot_transaction(uid, "REFUND", VIDEO_FEE, "Video timeout refund")
+        bot.send_message(message.chat.id, f"⚠️ Video render timed out. Balance refunded. Error: {e}")
 
 # --- ADMIN COUPON CREATOR ENGINE ---
 @bot.message_handler(func=lambda message: message.from_user.id in admin_coupon_flow and message.from_user.id == ADMIN_ID)
@@ -1677,7 +1834,7 @@ def handle_admin_action(message):
             target_id = int(text)
             u = get_user(target_id)
             if u:
-                role = "👑 Admin" if target_id == ADMIN_ID else f"👤 {u['role']}"
+                role = "👑 Master Admin" if target_id == ADMIN_ID else f"👤 {u['role']}"
                 ban_txt = "🚫 BANNED" if u['banned'] else "🟢 ACTIVE"
                 bot.send_message(
                     message.chat.id, 
