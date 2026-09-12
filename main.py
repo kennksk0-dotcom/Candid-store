@@ -495,6 +495,26 @@ def smm_place_order(service_id, link, quantity):
     except Exception as e:
         return {"error": str(e)}
 
+# --- INSTAGRAM DIRECT MP4 PARSER ---
+def fetch_instagram_direct_mp4(url):
+    clean_url = url.split("?")[0].strip()
+    gateways = [
+        f"https://api.vkrdown.com/insta/?url={clean_url}",
+        f"https://cors.isteal.workers.dev/api/instagram?url={clean_url}",
+        f"https://www.socialkit.dev/api/instagram?url={clean_url}"
+    ]
+    for gw in gateways:
+        try:
+            r = requests.get(gw, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                d_url = data.get("downloadUrl") or data.get("url") or (data.get("data") and data["data"].get("downloadUrl"))
+                if d_url:
+                    return d_url
+        except Exception:
+            continue
+    return None
+
 # --- START COMMAND ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -633,12 +653,13 @@ def handle_callback(call):
 
     if call.data in [
         "mods_game_select", "add_balance", "profile", "orders", "referral", "support_ticket",
-        "main_menu", "admin_panel", "lucky_spin", "redeem_coupon", "open_ai_assistant",
+        "main_menu", "admin_panel", "lucky_spin", "redeem_coupon",
         "temp_mail_menu", "smm_main_menu", "open_image_gen", "open_rembg", "open_enhance", "open_downloader"
     ]:
         waiting_for_custom_topup.pop(user_id, None)
         waiting_for_support_ticket.pop(user_id, None)
         waiting_for_coupon_code.pop(user_id, None)
+        waiting_for_ai_prompt.pop(user_id, None)
         waiting_for_image_prompt.pop(user_id, None)
         waiting_for_rembg_photo.pop(user_id, None)
         waiting_for_enhance_photo.pop(user_id, None)
@@ -1662,27 +1683,55 @@ def handle_ai_input(message):
     final_text = ans or "Store AI is momentarily busy. Please ask again in a moment!"
     bot.send_message(message.chat.id, final_text, reply_markup=reply_markup)
 
-# --- UNIVERSAL VIDEO DOWNLOADER HANDLER (WITH MOBILE CLIENT BYPASS) ---
+# --- UNIVERSAL VIDEO DOWNLOADER (HYBRID SCRAPER + MOBILE SPOOFING) ---
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_dl_link)
 def handle_video_download_flow(message):
     uid = message.from_user.id
     waiting_for_dl_link.pop(uid, None)
-    url = message.text.strip()
+    raw_url = message.text.strip()
 
-    if url.startswith("/"):
+    if raw_url.startswith("/"):
         bot.send_message(message.chat.id, "❌ Video download canceled.")
         return
 
-    if not (url.startswith("http://") or url.startswith("https://")):
+    if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
         bot.send_message(message.chat.id, "❌ Please send a valid link starting with `https://`.")
-        return
-
-    if not YTDLP_ENABLED or yt_dlp is None:
-        bot.send_message(message.chat.id, "⚠️ Downloader engine is updating. Please try again in 2 minutes.")
         return
 
     status_msg = bot.send_message(message.chat.id, "⏳ Fetching video stream... Please wait a moment.")
     bot.send_chat_action(message.chat.id, 'upload_video')
+
+    markup = telebot.types.InlineKeyboardMarkup().add(
+        telebot.types.InlineKeyboardButton("📥 Download Another", callback_data="open_downloader"),
+        telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
+    )
+
+    # 1. SPECIAL INSTAGRAM HANDLER (Bypasses Login Gate)
+    if "instagram.com" in raw_url:
+        direct_url = fetch_instagram_direct_mp4(raw_url)
+        if direct_url:
+            try:
+                vid_res = requests.get(direct_url, timeout=30, stream=True)
+                if vid_res.status_code == 200:
+                    try:
+                        bot.delete_message(message.chat.id, status_msg.message_id)
+                    except Exception:
+                        pass
+                    bot.send_video(
+                        message.chat.id,
+                        vid_res.content,
+                        caption="🎬 **Instagram Reel**\n⚡ Downloaded Free via CandidStore",
+                        parse_mode="Markdown",
+                        reply_markup=markup
+                    )
+                    return
+            except Exception:
+                pass
+
+    # 2. YOUTUBE, TIKTOK, AND FALLBACK ENGINE
+    if not YTDLP_ENABLED or yt_dlp is None:
+        bot.send_message(message.chat.id, "⚠️ Downloader engine is updating. Try again in 2 minutes.")
+        return
 
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1700,12 +1749,12 @@ def handle_video_download_flow(message):
                     }
                 },
                 'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/UD1A.230803.041) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36'
+                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'
                 }
             }
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
+                info = ydl.extract_info(raw_url, download=True)
                 downloaded_file = ydl.prepare_filename(info)
 
             try:
@@ -1716,14 +1765,10 @@ def handle_video_download_flow(message):
             if os.path.exists(downloaded_file):
                 f_size = os.path.getsize(downloaded_file) / (1024 * 1024)
                 if f_size > 49.5:
-                    bot.send_message(message.chat.id, f"⚠️ Video size ({f_size:.1f}MB) exceeds Telegram's 50MB bot upload limit.")
+                    bot.send_message(message.chat.id, f"⚠️ Video size ({f_size:.1f}MB) exceeds Telegram's 50MB limit.")
                     return
 
                 title = info.get('title', 'Downloaded Video')[:70]
-                markup = telebot.types.InlineKeyboardMarkup().add(
-                    telebot.types.InlineKeyboardButton("📥 Download Another", callback_data="open_downloader"),
-                    telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
-                )
                 with open(downloaded_file, 'rb') as vf:
                     bot.send_video(
                         message.chat.id,
@@ -1740,7 +1785,7 @@ def handle_video_download_flow(message):
             bot.delete_message(message.chat.id, status_msg.message_id)
         except Exception:
             pass
-        bot.send_message(message.chat.id, f"⚠️ Download failed. Ensure link is public and under 50MB. ({str(e)[:90]})")
+        bot.send_message(message.chat.id, f"⚠️ Download failed: ({str(e)[:85]})")
 
 # --- 1. AI IMAGE GENERATION HANDLER (POLLINATIONS FLUX) ---
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_image_prompt)
