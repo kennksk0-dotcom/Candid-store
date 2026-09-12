@@ -1,4 +1,6 @@
 pyTelegramBotAPI
 requests
 psycopg2-binary
-google-generativeai
+Pillow
+rembg
+onnxruntime
