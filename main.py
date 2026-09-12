@@ -445,7 +445,6 @@ def atomic_update_balance(user_id, amount_change, spend_add=0, order_add=0):
 def fetch_instagram_direct_mp4(url):
     clean_url = url.split("?")[0].strip()
     
-    # Public high-speed Cobalt media extraction instances
     cobalt_nodes = [
         "https://api.cobalt.tools",
         "https://cobalt-api.kwiatekm.tokyo",
@@ -475,19 +474,32 @@ def fetch_instagram_direct_mp4(url):
         except Exception:
             continue
             
-    # Secondary proxy scraper fallback
     gateways = [
         f"https://api.vkrdown.com/insta/?url={clean_url}",
-        f"https://cors.isteal.workers.dev/api/instagram?url={clean_url}"
+        f"https://snapinsta.app/api/ajaxSearch?q={clean_url}&t=media"
     ]
+    snap_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://snapinsta.app/"
+    }
     for gw in gateways:
         try:
-            r2 = requests.get(gw, timeout=10)
+            if "snapinsta" in gw:
+                r2 = requests.post(gw, data={"q": clean_url, "t": "media"}, headers=snap_headers, timeout=10)
+            else:
+                r2 = requests.get(gw, headers=snap_headers, timeout=10)
+                
             if r2.status_code == 200:
                 d2 = r2.json()
-                d_url = d2.get("downloadUrl") or d2.get("url") or (d2.get("data") and d2["data"].get("downloadUrl"))
-                if d_url:
+                d_url = d2.get("downloadUrl") or d2.get("url") or d2.get("data")
+                if isinstance(d_url, list) and len(d_url) > 0:
+                    return d_url[0]
+                if isinstance(d_url, str) and d_url.startswith("http"):
                     return d_url
+                if "data" in d2 and isinstance(d2["data"], dict):
+                    nested = d2["data"].get("downloadUrl") or d2["data"].get("url")
+                    if nested:
+                        return nested
         except Exception:
             continue
 
@@ -2026,7 +2038,7 @@ def handle_enhance_photo(message):
     try:
         file_id = message.photo[-1].file_id if message.content_type == 'photo' else message.document.file_id
         file_info = bot.get_file(file_id)
-        downloaded = bot.download_file(file_info.file_path)
+        downloaded_file = bot.download_file(file_info.file_path)
 
         image = Image.open(io.BytesIO(downloaded)).convert("RGB")
         w, h = image.size
