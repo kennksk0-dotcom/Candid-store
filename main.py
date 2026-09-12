@@ -23,7 +23,7 @@ XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
 # Loaded securely from Railway variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "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"
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
 AI_INSTRUCTION = (
@@ -92,12 +92,14 @@ def init_db():
                 verified INTEGER DEFAULT 0,
                 total_referrals INTEGER DEFAULT 0,
                 last_spin_time TEXT,
-                bonus_spins INTEGER DEFAULT 0
+                bonus_spins INTEGER DEFAULT 0,
+                tempmail_expires_at TEXT
             )
         ''')
         cursor.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_spins INTEGER DEFAULT 0;')
         cursor.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referrals INTEGER DEFAULT 0;')
         cursor.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_spin_time TEXT;')
+        cursor.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS tempmail_expires_at TEXT;')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS orders (
@@ -209,7 +211,8 @@ def get_user(user_id):
                 "verified": bool(row["verified"]),
                 "total_referrals": int(row["total_referrals"] or 0),
                 "last_spin_time": row["last_spin_time"],
-                "bonus_spins": int(row["bonus_spins"] or 0)
+                "bonus_spins": int(row["bonus_spins"] or 0),
+                "tempmail_expires_at": row["tempmail_expires_at"] if "tempmail_expires_at" in row.keys() else None
             }
     except Exception as e:
         release_db_connection(conn, close=True)
@@ -430,7 +433,7 @@ def show_main_menu(chat_id, user_id):
         "🟢 **STORE & UTILITIES HUB ONLINE** 🟢\n\n"
         "✨ **Available Services & Perks**\n"
         "💎 Verified Keys & Instant Delivery\n"
-        "📬 Free Disposable Temp Mail (with OTP inbox)\n"
+        "📬 Disposable Temp Mail Pass (6h Unlimited)\n"
         "🤖 Dual-Core Smart AI Assistant\n"
         "🎟️ Support Tickets & Lucky Spin System\n\n"
         "🛒 **Select an option below:**"
@@ -495,32 +498,97 @@ def handle_callback(call):
         admin_actions.pop(user_id, None)
         admin_coupon_flow.pop(user_id, None)
 
-    # --- TEMP MAIL HANDLERS ---
+    # --- MONETIZED TEMP MAIL SERVICE (₹10 for 6 Hours) ---
     if call.data == "temp_mail_menu":
         bot.answer_callback_query(call.id)
-        current = user_temp_mails.get(user_id)
-        markup = telebot.types.InlineKeyboardMarkup()
+        fresh_user = get_user(user_id)
         
+        has_active_pass = False
+        remaining_str = ""
+        exp_str = fresh_user.get("tempmail_expires_at")
+        if exp_str:
+            try:
+                exp_dt = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
+                if datetime.now() < exp_dt:
+                    has_active_pass = True
+                    rem_sec = int((exp_dt - datetime.now()).total_seconds())
+                    hours, rem = divmod(rem_sec, 3600)
+                    mins = rem // 60
+                    remaining_str = f"{hours}h {mins}m"
+            except Exception:
+                pass
+
+        markup = telebot.types.InlineKeyboardMarkup()
+
+        if not has_active_pass:
+            paywall_text = (
+                "📬 **— TEMPORARY DISPOSABLE MAIL PASS —** 📬\n\n"
+                "⚡ **Unlimited inboxes & OTP verification**\n"
+                "⏱️ **Pass Duration:** 6 Hours\n"
+                "💰 **Price:** `₹10.00`\n\n"
+                f"💳 **Your Wallet Balance:** `₹{fresh_user['balance']:.2f}`\n\n"
+                "Use this to register unlimited game accounts, bypass OTP verifications, and create test profiles."
+            )
+            markup.add(telebot.types.InlineKeyboardButton("🔓 Buy 6-Hour Pass — ₹10", callback_data="buy_tempmail_pass"))
+            markup.add(telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"))
+            markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+            bot.edit_message_text(paywall_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+            return
+
+        current = user_temp_mails.get(user_id)
         if current:
             mail_addr = current["address"]
-            text = (
-                "📬 **— TEMPORARY EMAIL SERVICE —** 📬\n\n"
-                f"📧 **Active Address:**\n`{mail_addr}`\n*(Tap the address to copy)*\n\n"
-                "Use this address on any website or game requiring OTP verification.\n"
-                "Click **🔄 Check Inbox** below to view incoming verification emails!"
+            active_text = (
+                "📬 **— TEMPORARY EMAIL DASHBOARD —** 📬\n\n"
+                f"⏳ **Pass Active Remaining:** `{remaining_str}`\n\n"
+                f"📧 **Current Address:**\n`{mail_addr}`\n*(Tap to copy address)*\n\n"
+                "Use this email on any game/site to receive OTP codes instantly."
             )
             markup.add(telebot.types.InlineKeyboardButton("🔄 Check Inbox", callback_data="tmail_inbox"))
             markup.add(telebot.types.InlineKeyboardButton("⚡ Generate New Mail", callback_data="tmail_gen_new"))
         else:
-            text = (
-                "📬 **— TEMPORARY EMAIL SERVICE —** 📬\n\n"
-                "Need a throwaway email to create test game accounts or receive OTPs?\n\n"
-                "Click below to generate a fresh, temporary disposable inbox instantly:"
+            active_text = (
+                "📬 **— TEMPORARY EMAIL DASHBOARD —** 📬\n\n"
+                f"⏳ **Pass Active Remaining:** `{remaining_str}`\n\n"
+                "You have full unlimited access. Tap below to generate your first mailbox:"
             )
             markup.add(telebot.types.InlineKeyboardButton("⚡ Generate Email", callback_data="tmail_gen_new"))
-            
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
+        bot.edit_message_text(active_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "buy_tempmail_pass":
+        fresh_user = get_user(user_id)
+        cost = 10.0
+
+        if fresh_user["balance"] < cost:
+            bot.answer_callback_query(call.id, text="Insufficient wallet balance!", show_alert=True)
+            markup = telebot.types.InlineKeyboardMarkup()
+            markup.add(telebot.types.InlineKeyboardButton("💳 Add Balance Now", callback_data="add_balance"))
+            markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Temp Mail", callback_data="temp_mail_menu"))
+            bot.send_message(
+                call.message.chat.id,
+                f"❌ **Insufficient Balance!**\nRequired: ₹10.00 | Wallet: ₹{fresh_user['balance']:.2f}\n\nPlease add balance to activate the pass.",
+                parse_mode="Markdown", reply_markup=markup
+            )
+            return
+
+        atomic_update_balance(user_id, -cost, spend_add=cost, order_add=1)
+        log_bot_transaction(user_id, "TEMPMAIL_PASS", cost, "Purchased 6-Hour Temp Mail Unlimited Pass")
+
+        expires_at = (datetime.now() + timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute('UPDATE users SET tempmail_expires_at = %s WHERE user_id = %s', (expires_at, user_id))
+            conn.commit()
+            cur.close()
+            release_db_connection(conn)
+        except Exception:
+            release_db_connection(conn, close=True)
+
+        bot.answer_callback_query(call.id, text="Pass Activated for 6 Hours!", show_alert=True)
+        handle_callback(type('obj', (object,), {'from_user': call.from_user, 'message': call.message, 'data': 'temp_mail_menu', 'id': call.id}))
 
     elif call.data == "tmail_gen_new":
         bot.answer_callback_query(call.id, text="Creating temporary inbox...")
@@ -530,7 +598,7 @@ def handle_callback(call):
             markup = telebot.types.InlineKeyboardMarkup()
             markup.add(telebot.types.InlineKeyboardButton("🔄 Check Inbox", callback_data="tmail_inbox"))
             markup.add(telebot.types.InlineKeyboardButton("⚡ Generate Another", callback_data="tmail_gen_new"))
-            markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+            markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="temp_mail_menu"))
             bot.edit_message_text(
                 "🎉 **Temporary Email Ready!**\n\n"
                 f"📧 **Your Address:**\n`{addr}`\n\n"
@@ -569,7 +637,7 @@ def handle_callback(call):
 
         markup.add(telebot.types.InlineKeyboardButton("🔄 Refresh Inbox", callback_data="tmail_inbox"))
         markup.add(telebot.types.InlineKeyboardButton("⚡ New Email", callback_data="tmail_gen_new"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Temp Mail", callback_data="temp_mail_menu"))
         bot.edit_message_text(inbox_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data.startswith("tmail_read_"):
@@ -1793,5 +1861,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Ultimate All-in-One Store & Utilities Bot running live!")
+print("Ultimate Monetized All-in-One Store & Utilities Bot running live!")
 bot.infinity_polling()
