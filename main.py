@@ -58,12 +58,12 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
 AI_INSTRUCTION = (
-    "You are CandidStore AI, customer assistant for CandidStore.\n"
+    "You are CandidStore AI, helpful customer assistant for CandidStore.\n"
     "We provide Game Mod Keys (Free Fire, CODM, MLBB, 8 Ball Pool, Carrom Pool, Snake Soccer), "
     "iOS Gbox Certificates, SMM Social Media Boosting (IG Views @ ₹1/1k, TG Members @ ₹35/1k, Likes, Followers), "
     "Free Video Downloader (Insta Reels & YouTube Shorts), AI Image Generation @ ₹2, AI Background Remover @ ₹1, "
     "AI Image Enhancer @ ₹1, and 100% Free Disposable Temp Mail.\n"
-    "Explain Root vs Non-Root vs iOS cleanly and assist with orders."
+    "Guide users naturally, explain Root vs Non-Root vs iOS cleanly, and assist them continuously."
 )
 
 STORE_UNDER_MAINTENANCE = False
@@ -551,64 +551,57 @@ def show_main_menu(chat_id, user_id):
     user_role = user.get("role", "Customer") if user else "Customer"
 
     welcome_text = (
-        "╔═══════════════════════════════╗\n"
-        "   ⚡ **CANDIDSTORE — MASTER DASHBOARD** ⚡\n"
-        "╚═══════════════════════════════╝\n\n"
-        "🚀 **Instant Delivery Services & Utilities:**\n"
-        "• 🎮 Official Free Fire Mod Keys & Game Packs\n"
-        "• 📥 Free Video Downloader (Insta Reels & YT Shorts)\n"
-        "• 📈 SMM Boosting (Reel Views @ ₹1/1k | TG @ ₹35/1k)\n"
-        "• 🎨 AI Flux 4K Image Generator @ ₹2.00\n"
-        "• ✂️ AI Transparent BG Cutout @ ₹1.00\n"
-        "• ✨ AI 4K Detail Enhancer & Upscaler @ ₹1.00\n"
-        "• 📬 100% Free Unlimited Temp Mail Inboxes\n"
-        "• 🤖 24/7 Dual-Core AI Customer Assistant\n\n"
-        "👇 **Tap an action to begin:**"
+        "🟢 **STORE & UTILITIES HUB ONLINE** 🟢\n\n"
+        "✨ **Available Services & Perks**\n"
+        "💎 Instant Delivery of Verified Game Keys\n"
+        "🚀 Social Media Booster (IG Views @ ₹1/1k, TG Members @ ₹35/1k)\n"
+        "📥 Free Video Downloader (Insta Reels & YouTube Shorts)\n"
+        "🎨 AI Image Generator (Flux 4K @ ₹2)\n"
+        "✂️ AI Background Remover (Cutout @ ₹1)\n"
+        "✨ AI Image Enhancer & Upscaler (4K @ ₹1)\n"
+        "📬 100% Free Disposable Temp Mail Service\n"
+        "🤖 Dual-Core Smart AI Assistant (24/7 Support)\n"
+        "🎟️ Support Tickets & Lucky Spin System\n\n"
+        "🛒 **Select an option below:**"
     )
     if is_admin or user_role == "Reseller":
         welcome_text += f"\n\n⚙️ [{user_role} Dashboard Unlocked]"
 
     markup = telebot.types.InlineKeyboardMarkup()
-    # Row 1: Primary Gaming Keys (Prominent FF MOD KEYS)
-    markup.add(
-        telebot.types.InlineKeyboardButton("🎮 FF MOD KEYS", callback_data="game_ff"),
-        telebot.types.InlineKeyboardButton("🕹️ All Games Catalog", callback_data="mods_game_select")
-    )
-    # Row 2: Free Downloader & SMM
+    # Big Full-Width Hero Button: Mod Keys
+    markup.add(telebot.types.InlineKeyboardButton("🎮 ALL GAME KEYS CATALOG", callback_data="mods_game_select"))
+    
+    # 2x2 Utility Grid
     markup.add(
         telebot.types.InlineKeyboardButton("📥 Download Videos (Free)", callback_data="open_downloader"),
         telebot.types.InlineKeyboardButton("🚀 Boost Socials", callback_data="smm_main_menu")
     )
-    # Row 3: AI Media Suite
     markup.add(
         telebot.types.InlineKeyboardButton("🎨 AI Image Gen (₹2)", callback_data="open_image_gen"),
         telebot.types.InlineKeyboardButton("✂️ Remove BG (₹1)", callback_data="open_rembg")
     )
-    # Row 4: AI Enhancer & Free Mail
     markup.add(
         telebot.types.InlineKeyboardButton("✨ Enhance / 4K (₹1)", callback_data="open_enhance"),
         telebot.types.InlineKeyboardButton("📬 Temp Mail (Free)", callback_data="temp_mail_menu")
     )
-    # Row 5: Wallet & Smart AI
     markup.add(
         telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
         telebot.types.InlineKeyboardButton("🤖 Ask Store AI", callback_data="open_ai_assistant")
     )
-    # Row 6: History & Rewards
     markup.add(
         telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders"),
         telebot.types.InlineKeyboardButton("🎁 Referral", callback_data="referral")
     )
-    # Row 7: Daily Spin & Tickets
     markup.add(
         telebot.types.InlineKeyboardButton("🎡 Lucky Spin", callback_data="lucky_spin"),
         telebot.types.InlineKeyboardButton("🎟️ Support Ticket", callback_data="support_ticket")
     )
-    # Row 8: Coupon & Profile Dashboard
     markup.add(
-        telebot.types.InlineKeyboardButton("🏷️ Redeem Coupon", callback_data="redeem_coupon"),
-        telebot.types.InlineKeyboardButton("👤 Full Profile Dashboard", callback_data="profile")
+        telebot.types.InlineKeyboardButton("🏷️ Redeem Coupon", callback_data="redeem_coupon")
     )
+    # Big Full-Width Hero Button: Profile Dashboard
+    markup.add(telebot.types.InlineKeyboardButton("👤 FULL PROFILE DASHBOARD", callback_data="profile"))
+
     if is_admin:
         markup.add(telebot.types.InlineKeyboardButton("👑 Master Admin Panel", callback_data="admin_panel"))
 
@@ -646,7 +639,6 @@ def handle_callback(call):
         waiting_for_custom_topup.pop(user_id, None)
         waiting_for_support_ticket.pop(user_id, None)
         waiting_for_coupon_code.pop(user_id, None)
-        waiting_for_ai_prompt.pop(user_id, None)
         waiting_for_image_prompt.pop(user_id, None)
         waiting_for_rembg_photo.pop(user_id, None)
         waiting_for_enhance_photo.pop(user_id, None)
@@ -1262,7 +1254,13 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         waiting_for_ai_prompt[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text("🤖 **STORE AI ASSISTANT**\n\n👇 Reply with any question regarding mod keys, root vs non-root, or boosting services:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text(
+            "🤖 **STORE AI ASSISTANT (Continuous Chat)**\n\n"
+            "Ask me anything about mod keys (Root vs Non-Root vs iOS), boosting packages, or store policies.\n\n"
+            "👇 **Type your questions below:**\n"
+            "*(You can send multiple messages. Tap 'Back to Menu' when finished.)*",
+            call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
+        )
 
     # 11. MASTER ADMIN PANEL
     elif call.data == "admin_panel" and is_admin:
@@ -1616,11 +1614,18 @@ def handle_coupon_input(message):
     finally:
         release_db_connection(conn)
 
+# --- STORE AI ASSISTANT (PERSISTENT CONVERSATION MODE) ---
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_ai_prompt)
 def handle_ai_input(message):
     uid = message.from_user.id
-    waiting_for_ai_prompt.pop(uid, None)
     query = message.text.strip()
+
+    if query.startswith("/"):
+        waiting_for_ai_prompt.pop(uid, None)
+        bot.send_message(message.chat.id, "👋 Exited Store AI assistant mode.")
+        show_main_menu(message.chat.id, uid)
+        return
+
     bot.send_chat_action(message.chat.id, 'typing')
     ans = None
 
@@ -1630,7 +1635,7 @@ def handle_ai_input(message):
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
                 headers={"Content-Type": "application/json", "X-goog-api-key": GEMINI_API_KEY.strip()},
                 json={"contents": [{"parts": [{"text": f"{AI_INSTRUCTION}\n\nCustomer: {query}\nAnswer:"}]}]},
-                timeout=10
+                timeout=12
             )
             cands = r.json().get("candidates", [])
             if cands:
@@ -1644,15 +1649,20 @@ def handle_ai_input(message):
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={"Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}", "Content-Type": "application/json"},
                 json={"model": "meta-llama/llama-3.1-8b-instruct:free", "messages": [{"role": "system", "content": AI_INSTRUCTION}, {"role": "user", "content": query}]},
-                timeout=10
+                timeout=12
             )
             ans = r.json()["choices"][0]["message"]["content"]
         except Exception:
             pass
 
-    bot.send_message(message.chat.id, ans or "Store AI is momentarily busy. Please try again.")
+    reply_markup = telebot.types.InlineKeyboardMarkup().add(
+        telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
+    )
 
-# --- UNIVERSAL VIDEO DOWNLOADER HANDLER (FREE) ---
+    final_text = ans or "Store AI is momentarily busy. Please ask again in a moment!"
+    bot.send_message(message.chat.id, final_text, reply_markup=reply_markup)
+
+# --- UNIVERSAL VIDEO DOWNLOADER HANDLER (WITH MOBILE CLIENT BYPASS) ---
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_dl_link)
 def handle_video_download_flow(message):
     uid = message.from_user.id
@@ -1683,7 +1693,15 @@ def handle_video_download_flow(message):
                 'quiet': True,
                 'no_warnings': True,
                 'noplaylist': True,
-                'retries': 3
+                'retries': 3,
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android', 'ios'],
+                    }
+                },
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/UD1A.230803.041) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36'
+                }
             }
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
