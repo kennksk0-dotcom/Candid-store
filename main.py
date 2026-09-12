@@ -441,6 +441,58 @@ def atomic_update_balance(user_id, amount_change, spend_add=0, order_add=0):
     finally:
         release_db_connection(conn)
 
+# --- INSTAGRAM & SOCIAL DIRECT STREAM EXTRACTOR ---
+def fetch_instagram_direct_mp4(url):
+    clean_url = url.split("?")[0].strip()
+    
+    # Public high-speed Cobalt media extraction instances
+    cobalt_nodes = [
+        "https://api.cobalt.tools",
+        "https://cobalt-api.kwiatekm.tokyo",
+        "https://api.wuk.sh"
+    ]
+    
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+    payload = {
+        "url": clean_url,
+        "videoQuality": "720",
+        "filenameStyle": "basic"
+    }
+    
+    for node in cobalt_nodes:
+        try:
+            r = requests.post(f"{node}/api/json", json=payload, headers=headers, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                if "url" in data:
+                    return data["url"]
+                if "picker" in data and len(data["picker"]) > 0:
+                    return data["picker"][0].get("url")
+        except Exception:
+            continue
+            
+    # Secondary proxy scraper fallback
+    gateways = [
+        f"https://api.vkrdown.com/insta/?url={clean_url}",
+        f"https://cors.isteal.workers.dev/api/instagram?url={clean_url}"
+    ]
+    for gw in gateways:
+        try:
+            r2 = requests.get(gw, timeout=10)
+            if r2.status_code == 200:
+                d2 = r2.json()
+                d_url = d2.get("downloadUrl") or d2.get("url") or (d2.get("data") and d2["data"].get("downloadUrl"))
+                if d_url:
+                    return d_url
+        except Exception:
+            continue
+
+    return None
+
 # --- MAIL.TM FREE DISPOSABLE INBOX ENGINE ---
 def mailtm_get_domain():
     try:
@@ -494,26 +546,6 @@ def smm_place_order(service_id, link, quantity):
         return res.json()
     except Exception as e:
         return {"error": str(e)}
-
-# --- INSTAGRAM DIRECT MP4 PARSER ---
-def fetch_instagram_direct_mp4(url):
-    clean_url = url.split("?")[0].strip()
-    gateways = [
-        f"https://api.vkrdown.com/insta/?url={clean_url}",
-        f"https://cors.isteal.workers.dev/api/instagram?url={clean_url}",
-        f"https://www.socialkit.dev/api/instagram?url={clean_url}"
-    ]
-    for gw in gateways:
-        try:
-            r = requests.get(gw, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                d_url = data.get("downloadUrl") or data.get("url") or (data.get("data") and data["data"].get("downloadUrl"))
-                if d_url:
-                    return d_url
-        except Exception:
-            continue
-    return None
 
 # --- START COMMAND ---
 @bot.message_handler(commands=['start'])
@@ -1706,12 +1738,12 @@ def handle_video_download_flow(message):
         telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
     )
 
-    # 1. SPECIAL INSTAGRAM HANDLER (Bypasses Login Gate)
+    # 1. SPECIAL INSTAGRAM PIPELINE (Bypasses Login Gate)
     if "instagram.com" in raw_url:
         direct_url = fetch_instagram_direct_mp4(raw_url)
         if direct_url:
             try:
-                vid_res = requests.get(direct_url, timeout=30, stream=True)
+                vid_res = requests.get(direct_url, timeout=35, stream=True)
                 if vid_res.status_code == 200:
                     try:
                         bot.delete_message(message.chat.id, status_msg.message_id)
@@ -1727,8 +1759,19 @@ def handle_video_download_flow(message):
                     return
             except Exception:
                 pass
+        
+        try:
+            bot.delete_message(message.chat.id, status_msg.message_id)
+        except Exception:
+            pass
+        bot.send_message(
+            message.chat.id,
+            "⚠️ Unable to download this Reel. Make sure the Instagram account is public and not age-restricted.",
+            reply_markup=markup
+        )
+        return
 
-    # 2. YOUTUBE, TIKTOK, AND FALLBACK ENGINE
+    # 2. YOUTUBE, TIKTOK, AND TWITTER (X) PIPELINE
     if not YTDLP_ENABLED or yt_dlp is None:
         bot.send_message(message.chat.id, "⚠️ Downloader engine is updating. Try again in 2 minutes.")
         return
