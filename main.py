@@ -28,7 +28,7 @@ AAPKA_API_URL = "https://aapkaprovider.com/api/v2"
 AAPKA_API_KEY = os.environ.get("AAPKA_API_KEY") or "64e5f851a708586e575c1e76719bd653"
 
 # POLLINATIONS AI CONFIG
-POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY") or "sk_T1yQaq7_REPLACE_WITH_FULL_KEY"
+POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY") or "sk_T1yQaq7ay5S6l1QdjepQtMh0ak8F1SJi"
 IMAGE_FEE = 2.0  # Cost per image in INR
 
 # AI & DB CONFIG
