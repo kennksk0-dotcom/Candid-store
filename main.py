@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import threading
 import time
 import random
+import string
 
 # --- CONFIGURATION ---
 BOT_TOKEN = "8980753842:AAG05SklWh3TshUWiJio1_MTWo2Net-ijiE"
@@ -71,6 +72,7 @@ waiting_for_custom_topup = {}
 waiting_for_support_ticket = {}
 waiting_for_coupon_code = {}
 waiting_for_ai_prompt = {}
+user_temp_mails = {}
 
 def init_db():
     conn = get_db_connection()
@@ -301,6 +303,68 @@ def get_custom_price(panel_price, is_reseller):
         return panel_price + 2
     return panel_price * 2
 
+# --- TEMP MAIL HELPER FUNCTIONS (mail.tm REST API) ---
+def mailtm_get_domain():
+    try:
+        r = requests.get("https://api.mail.tm/domains", timeout=10)
+        data = r.json()
+        domains = data.get("hydra:member", [])
+        if domains:
+            return domains[0]["domain"]
+    except Exception:
+        pass
+    return None
+
+def mailtm_create_account():
+    domain = mailtm_get_domain()
+    if not domain:
+        return None, None, None
+    rand_name = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    address = f"{rand_name}@{domain}"
+    password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+    
+    try:
+        acc_res = requests.post(
+            "https://api.mail.tm/accounts",
+            json={"address": address, "password": password},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        if acc_res.status_code in [200, 201]:
+            tok_res = requests.post(
+                "https://api.mail.tm/token",
+                json={"address": address, "password": password},
+                headers={"Content-Type": "application/json"},
+                timeout=10
+            )
+            token = tok_res.json().get("token")
+            return address, token, password
+    except Exception:
+        pass
+    return None, None, None
+
+def mailtm_fetch_messages(token):
+    try:
+        r = requests.get(
+            "https://api.mail.tm/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10
+        )
+        return r.json().get("hydra:member", [])
+    except Exception:
+        return []
+
+def mailtm_fetch_message_detail(token, msg_id):
+    try:
+        r = requests.get(
+            f"https://api.mail.tm/messages/{msg_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10
+        )
+        return r.json()
+    except Exception:
+        return None
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -363,26 +427,27 @@ def show_main_menu(chat_id, user_id):
     guest_price = get_price(15, 10, is_res)
     
     welcome_text = (
-        "🟢 **STORE ONLINE | CHOOSE YOUR GAME** 🟢\n\n"
-        "✨ **Available Perks**\n"
-        "💎 Premium Verified Keys\n"
-        "⚡ Lightning Instant Delivery\n"
-        "🔒 Maximum Security & Protection\n"
-        "🎟️ Support Ticket & Lucky Spin System Active\n\n"
+        "🟢 **STORE & UTILITIES HUB ONLINE** 🟢\n\n"
+        "✨ **Available Services & Perks**\n"
+        "💎 Verified Keys & Instant Delivery\n"
+        "📬 Free Disposable Temp Mail (with OTP inbox)\n"
+        "🤖 Dual-Core Smart AI Assistant\n"
+        "🎟️ Support Tickets & Lucky Spin System\n\n"
         "🛒 **Select an option below:**"
     )
     
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("🛒 All Products", callback_data="all_products"))
     markup.add(telebot.types.InlineKeyboardButton(f"🔥 Guest ID 9 Level Accounts - ₹{guest_price}", callback_data="buy_guest_account"))
+    markup.add(telebot.types.InlineKeyboardButton("📬 Temp Mail Service", callback_data="temp_mail_menu"),
+               telebot.types.InlineKeyboardButton("🤖 Ask Store AI", callback_data="open_ai_assistant"))
     markup.add(telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
                telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders"))
     markup.add(telebot.types.InlineKeyboardButton("🎁 Referral", callback_data="referral"),
                telebot.types.InlineKeyboardButton("🎡 Lucky Spin", callback_data="lucky_spin"))
     markup.add(telebot.types.InlineKeyboardButton("🎟️ Support Ticket", callback_data="support_ticket"),
                telebot.types.InlineKeyboardButton("🏷️ Redeem Coupon", callback_data="redeem_coupon"))
-    markup.add(telebot.types.InlineKeyboardButton("🤖 Ask Store AI", callback_data="open_ai_assistant"),
-               telebot.types.InlineKeyboardButton("👤 Profile", callback_data="profile"))
+    markup.add(telebot.types.InlineKeyboardButton("👤 Profile", callback_data="profile"))
     
     if is_admin or user_role == "Reseller":
         welcome_text += f"\n\n⚙️ [{user_role} Dashboard Unlocked]"
@@ -410,7 +475,7 @@ def handle_callback(call):
         "admin_panel", "adm_users_list_1", "adm_all_transactions", "adm_check_user", 
         "adm_addbal_menu", "adm_cutbal_menu", "adm_broadcast", "adm_toggle_reseller", 
         "adm_ban_menu", "adm_toggle_maintenance", "adm_view_tickets", "adm_create_coupon",
-        "profile", "orders", "referral", "support_ticket", "main_menu", "open_ai_assistant"
+        "profile", "orders", "referral", "support_ticket", "main_menu", "open_ai_assistant", "temp_mail_menu"
     ]
     
     if STORE_UNDER_MAINTENANCE and not is_admin and call.data not in maintenance_bypass_actions:
@@ -422,7 +487,7 @@ def handle_callback(call):
         )
         return
 
-    if call.data in ["all_products", "add_balance", "profile", "orders", "referral", "support_ticket", "main_menu", "admin_panel", "lucky_spin", "redeem_coupon", "open_ai_assistant"]:
+    if call.data in ["all_products", "add_balance", "profile", "orders", "referral", "support_ticket", "main_menu", "admin_panel", "lucky_spin", "redeem_coupon", "open_ai_assistant", "temp_mail_menu"]:
         waiting_for_custom_topup.pop(user_id, None)
         waiting_for_support_ticket.pop(user_id, None)
         waiting_for_coupon_code.pop(user_id, None)
@@ -430,14 +495,116 @@ def handle_callback(call):
         admin_actions.pop(user_id, None)
         admin_coupon_flow.pop(user_id, None)
 
-    if call.data == "open_ai_assistant":
+    # --- TEMP MAIL HANDLERS ---
+    if call.data == "temp_mail_menu":
+        bot.answer_callback_query(call.id)
+        current = user_temp_mails.get(user_id)
+        markup = telebot.types.InlineKeyboardMarkup()
+        
+        if current:
+            mail_addr = current["address"]
+            text = (
+                "📬 **— TEMPORARY EMAIL SERVICE —** 📬\n\n"
+                f"📧 **Active Address:**\n`{mail_addr}`\n*(Tap the address to copy)*\n\n"
+                "Use this address on any website or game requiring OTP verification.\n"
+                "Click **🔄 Check Inbox** below to view incoming verification emails!"
+            )
+            markup.add(telebot.types.InlineKeyboardButton("🔄 Check Inbox", callback_data="tmail_inbox"))
+            markup.add(telebot.types.InlineKeyboardButton("⚡ Generate New Mail", callback_data="tmail_gen_new"))
+        else:
+            text = (
+                "📬 **— TEMPORARY EMAIL SERVICE —** 📬\n\n"
+                "Need a throwaway email to create test game accounts or receive OTPs?\n\n"
+                "Click below to generate a fresh, temporary disposable inbox instantly:"
+            )
+            markup.add(telebot.types.InlineKeyboardButton("⚡ Generate Email", callback_data="tmail_gen_new"))
+            
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "tmail_gen_new":
+        bot.answer_callback_query(call.id, text="Creating temporary inbox...")
+        addr, tok, pwd = mailtm_create_account()
+        if addr and tok:
+            user_temp_mails[user_id] = {"address": addr, "token": tok, "password": pwd}
+            markup = telebot.types.InlineKeyboardMarkup()
+            markup.add(telebot.types.InlineKeyboardButton("🔄 Check Inbox", callback_data="tmail_inbox"))
+            markup.add(telebot.types.InlineKeyboardButton("⚡ Generate Another", callback_data="tmail_gen_new"))
+            markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+            bot.edit_message_text(
+                "🎉 **Temporary Email Ready!**\n\n"
+                f"📧 **Your Address:**\n`{addr}`\n\n"
+                "*(Tap the address to copy it)*\n\n"
+                "When you register on an app or website, come back here and tap **🔄 Check Inbox** to retrieve your OTP.",
+                call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
+            )
+        else:
+            bot.send_message(call.message.chat.id, "⚠️ Failed to reach Temp Mail server. Please try again in 5 seconds.")
+
+    elif call.data == "tmail_inbox":
+        bot.answer_callback_query(call.id, text="Checking inbox...")
+        current = user_temp_mails.get(user_id)
+        if not current:
+            bot.answer_callback_query(call.id, text="No active temp mail found. Please generate one first.", show_alert=True)
+            return
+            
+        msgs = mailtm_fetch_messages(current["token"])
+        markup = telebot.types.InlineKeyboardMarkup()
+        
+        if not msgs:
+            inbox_text = (
+                f"📬 **INBOX: `{current['address']}`**\n\n"
+                "📭 **Inbox is currently empty.**\n\n"
+                "Emails usually arrive within 5–15 seconds. If you just sent a verification code, wait a moment and tap **🔄 Refresh** below."
+            )
+        else:
+            inbox_text = f"📬 **INBOX: `{current['address']}`**\n\nIncoming messages:\n\n"
+            for m in msgs[:6]:
+                sender = m.get("from", {}).get("address", "Unknown")
+                subject = m.get("subject", "(No Subject)")
+                intro = m.get("intro", "")
+                m_id = m.get("id")
+                inbox_text += f"📩 **From:** `{sender}`\n📌 **Subject:** {subject}\n💬 {intro[:80]}...\n-------------------\n"
+                markup.add(telebot.types.InlineKeyboardButton(f"📖 Read: {subject[:25]}", callback_data=f"tmail_read_{m_id}"))
+
+        markup.add(telebot.types.InlineKeyboardButton("🔄 Refresh Inbox", callback_data="tmail_inbox"))
+        markup.add(telebot.types.InlineKeyboardButton("⚡ New Email", callback_data="tmail_gen_new"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
+        bot.edit_message_text(inbox_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data.startswith("tmail_read_"):
+        bot.answer_callback_query(call.id)
+        current = user_temp_mails.get(user_id)
+        if not current:
+            return
+        m_id = call.data.replace("tmail_read_", "")
+        detail = mailtm_fetch_message_detail(current["token"], m_id)
+        
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Inbox", callback_data="tmail_inbox"))
+        
+        if detail:
+            sender = detail.get("from", {}).get("address", "Unknown")
+            subject = detail.get("subject", "(No Subject)")
+            text_body = detail.get("text", "(No Text Body)")
+            msg_view = (
+                f"📩 **MESSAGE DETAILS**\n\n"
+                f"👤 **From:** `{sender}`\n"
+                f"📌 **Subject:** {subject}\n\n"
+                f"📝 **Body:**\n{text_body[:3500]}"
+            )
+            bot.edit_message_text(msg_view, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        else:
+            bot.send_message(call.message.chat.id, "❌ Unable to load email content.", reply_markup=markup)
+
+    elif call.data == "open_ai_assistant":
         bot.answer_callback_query(call.id)
         waiting_for_ai_prompt[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
         )
         ai_intro = (
-            "🤖 **— STORE AI ASSISTANT —** 🤖\n\n"
+            "🤖 **— STORE & UTILITIES AI ASSISTANT —** 🤖\n\n"
             "Ask me anything about:\n"
             "• Recommended keys for your device\n"
             "• Difference between Root and Non-Root\n"
@@ -1208,7 +1375,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Gateway Error: {str(e)}")
 
-# --- AI DUAL-ENGINE HANDLER (Gemini First + OpenRouter Zero-Drop Fallback) ---
+# --- AI DUAL-ENGINE HANDLER ---
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_ai_prompt)
 def handle_ai_query(message):
     user_id = message.from_user.id
@@ -1227,7 +1394,7 @@ def handle_ai_query(message):
     clean_or_key = (OPENROUTER_API_KEY or "").strip()
     reply_text = None
 
-    # --- 1. PRIMARY: GOOGLE GEMINI ---
+    # 1. Primary: Google Gemini
     if clean_gemini_key:
         headers = {
             "Content-Type": "application/json",
@@ -1255,7 +1422,7 @@ def handle_ai_query(message):
         except Exception:
             pass
 
-    # --- 2. BACKUP: OPENROUTER (Never Fails On Traffic Spikes) ---
+    # 2. Backup: OpenRouter
     if not reply_text and clean_or_key:
         or_models = [
             "openrouter/free",
@@ -1267,7 +1434,6 @@ def handle_ai_query(message):
             "HTTP-Referer": "https://t.me/CandidStoreBot",
             "X-Title": "CandidStore Bot"
         }
-        
         for model_id in or_models:
             try:
                 or_payload = {
@@ -1288,7 +1454,6 @@ def handle_ai_query(message):
             except Exception:
                 continue
 
-    # --- 3. DISPATCH RESPONSE ---
     if reply_text:
         bot.send_message(message.chat.id, f"🤖 **AI:**\n\n{reply_text}", parse_mode="Markdown", reply_markup=markup)
     else:
@@ -1628,5 +1793,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Ultimate Store Bot running live with Direct Gemini + OpenRouter Dual Engine!")
+print("Ultimate All-in-One Store & Utilities Bot running live!")
 bot.infinity_polling()
