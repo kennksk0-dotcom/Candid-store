@@ -20,12 +20,13 @@ XYZ_API_URL = "https://adminpanels.shop/api/reseller_v1.php"
 XYZ_API_KEY = "8dc220a22ee3ea0ba80340978c2f1248"
 XYZ_MASTER_KEY = "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
 
-# Loaded securely from Railway environment variables
+# Loaded securely from Railway variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "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"
 SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
 
 AI_INSTRUCTION = (
-    "You are CandidStore AI, the customer assistant for CandidStore.\n"
+    "You are CandidStore AI, the helpful customer assistant for CandidStore.\n"
     "Available Products in our store:\n"
     "- Aim Hack FF Nonroot\n"
     "- Bala Mod Config FF\n"
@@ -39,8 +40,8 @@ AI_INSTRUCTION = (
     "- Prime Hook Nonroot\n"
     "- Silent Cheat Nonroot & Root\n"
     "- Guest ID 9 Level Accounts\n\n"
-    "Instructions: Answer customer queries politely, concisely, and helpfully. "
-    "Explain differences between Root vs Non-Root and device compatibility clearly without trailing off."
+    "Instructions: Answer questions politely, concisely, and clearly. "
+    "Guide customers about Root vs Non-Root differences and device compatibility."
 )
 
 # --- GLOBAL STATES & CONNECTION POOL ---
@@ -755,8 +756,7 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.edit_message_text(
             "🎟️ **— SUPPORT TICKET SYSTEM —** 🎟️\n\nPlease select your problem category below:",
-            call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
-        )
+            call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data.startswith("tkt_cat_"):
         bot.answer_callback_query(call.id)
@@ -767,8 +767,7 @@ def handle_callback(call):
         )
         bot.edit_message_text(
             f"🎟️ **Selected Category:** `{category}`\n\n👇 **Please type and send your detailed message/proof below:**",
-            call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
-        )
+            call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "cancel_topup":
         bot.answer_callback_query(call.id, text="Order cancelled.")
@@ -1209,7 +1208,7 @@ def create_topup_order(message_obj, user_id, amount_inr):
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Gateway Error: {str(e)}")
 
-# --- AI DIRECT REST HANDLER (gemini-flash-latest with full sentence limit) ---
+# --- AI DUAL-ENGINE HANDLER (Gemini First + OpenRouter Zero-Drop Fallback) ---
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_ai_prompt)
 def handle_ai_query(message):
     user_id = message.from_user.id
@@ -1224,53 +1223,76 @@ def handle_ai_query(message):
         telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")
     )
 
-    clean_key = (GEMINI_API_KEY or "").strip()
-    if not clean_key:
-        bot.send_message(message.chat.id, "⚠️ `GEMINI_API_KEY` is not configured in Railway variables.", reply_markup=markup, parse_mode="Markdown")
-        return
+    clean_gemini_key = (GEMINI_API_KEY or "").strip()
+    clean_or_key = (OPENROUTER_API_KEY or "").strip()
+    reply_text = None
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
-    headers = {
-        "Content-Type": "application/json",
-        "X-goog-api-key": clean_key
-    }
-    
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": f"{AI_INSTRUCTION}\n\nCustomer: {query_text}\nAnswer:"
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "maxOutputTokens": 600,
-            "temperature": 0.7
+    # --- 1. PRIMARY: GOOGLE GEMINI ---
+    if clean_gemini_key:
+        headers = {
+            "Content-Type": "application/json",
+            "X-goog-api-key": clean_gemini_key
         }
-    }
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": f"{AI_INSTRUCTION}\n\nCustomer: {query_text}\nAnswer:"}]
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": 500,
+                "temperature": 0.7
+            }
+        }
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+        try:
+            res = requests.post(url, json=payload, headers=headers, timeout=10)
+            data = res.json()
+            if "candidates" in data and len(data["candidates"]) > 0:
+                parts = data["candidates"][0].get("content", {}).get("parts", [])
+                if parts and "text" in parts[0]:
+                    reply_text = parts[0]["text"].strip()
+        except Exception:
+            pass
 
-    try:
-        res = requests.post(url, json=payload, headers=headers, timeout=30)
-        data = res.json()
+    # --- 2. BACKUP: OPENROUTER (Never Fails On Traffic Spikes) ---
+    if not reply_text and clean_or_key:
+        or_models = [
+            "openrouter/free",
+            "meta-llama/llama-3.1-8b-instruct:free"
+        ]
+        or_headers = {
+            "Authorization": f"Bearer {clean_or_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://t.me/CandidStoreBot",
+            "X-Title": "CandidStore Bot"
+        }
+        
+        for model_id in or_models:
+            try:
+                or_payload = {
+                    "model": model_id,
+                    "messages": [
+                        {"role": "system", "content": AI_INSTRUCTION},
+                        {"role": "user", "content": query_text}
+                    ],
+                    "max_tokens": 500
+                }
+                or_res = requests.post("https://openrouter.ai/api/v1/chat/completions", json=or_payload, headers=or_headers, timeout=12)
+                data = or_res.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    content = data["choices"][0].get("message", {}).get("content", "").strip()
+                    if content:
+                        reply_text = content
+                        break
+            except Exception:
+                continue
 
-        reply_text = None
-        if "candidates" in data and len(data["candidates"]) > 0:
-            candidate = data["candidates"][0]
-            parts = candidate.get("content", {}).get("parts", [])
-            if parts and "text" in parts[0]:
-                reply_text = parts[0]["text"].strip()
-
-        if reply_text:
-            bot.send_message(message.chat.id, f"🤖 **AI:**\n\n{reply_text}", parse_mode="Markdown", reply_markup=markup)
-        else:
-            err_msg = data.get("error", {}).get("message", str(data)[:200])
-            bot.send_message(message.chat.id, f"⚠️ Google Response: `{err_msg}`", parse_mode="Markdown", reply_markup=markup)
-    except requests.exceptions.Timeout:
-        bot.send_message(message.chat.id, "⏳ Google took too long to answer. Please send your question again.", reply_markup=markup)
-    except Exception as e:
-        bot.send_message(message.chat.id, f"⚠️ Connection Error: `{str(e)}`", parse_mode="Markdown", reply_markup=markup)
+    # --- 3. DISPATCH RESPONSE ---
+    if reply_text:
+        bot.send_message(message.chat.id, f"🤖 **AI:**\n\n{reply_text}", parse_mode="Markdown", reply_markup=markup)
+    else:
+        bot.send_message(message.chat.id, "⚠️ Store AI is momentarily busy. Please try asking again in a few seconds.", parse_mode="Markdown", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_custom_topup)
 def handle_custom_topup(message):
@@ -1606,5 +1628,5 @@ def admin_input(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Format error! Use: `USER_ID AMOUNT`", parse_mode="Markdown")
 
-print("Ultimate Store Bot running live with Direct Gemini REST Engine!")
+print("Ultimate Store Bot running live with Direct Gemini + OpenRouter Dual Engine!")
 bot.infinity_polling()
