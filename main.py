@@ -37,7 +37,7 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID") or 7997110885)
 FAMPAY_API_KEY = os.environ.get("FAMPAY_API_KEY") or "FAM_LIVE_sk_hRGdY9XAmPu7wzRg9HXjwa8pHdPhKNGB"
 FAMPAY_BASE_URL = "https://py.freepanel.in/api/v1"
 
-# BANTIBHAIYA RESELLER CONFIG (UPDATED TO .TO DOMAIN)
+# BANTIBHAIYA RESELLER CONFIG (.TO DOMAIN)
 BANTI_API_URL = os.environ.get("BANTI_API_URL") or "https://bantibhaiya.to/api/reseller_v1.php"
 BANTI_API_KEY = os.environ.get("BANTI_API_KEY") or "8dc220a22ee3ea0ba80340978c2f1248"
 BANTI_MASTER_KEY = os.environ.get("BANTI_MASTER_KEY") or "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
@@ -46,11 +46,19 @@ BANTI_MASTER_KEY = os.environ.get("BANTI_MASTER_KEY") or "a7f3e8b2c9d1f4a6b8c2d5
 AAPKA_API_URL = "https://aapkaprovider.com/api/v2"
 AAPKA_API_KEY = os.environ.get("AAPKA_API_KEY") or "64e5f851a708586e575c1e76719bd653"
 
+# SMM SERVICE RATES & LIMITS
+SMM_SERVICES = {
+    "14686": {"name": "Instagram Reel Views", "rate": 1.0, "min": 100, "max": 1000000, "link_type": "Instagram Reel/Post link"},
+    "14811": {"name": "Telegram Channel Members", "rate": 35.0, "min": 100, "max": 100000, "link_type": "Public Telegram Channel/Group link (https://t.me/...)"},
+    "14166": {"name": "Instagram Indian Likes", "rate": 20.0, "min": 50, "max": 50000, "link_type": "Instagram Post/Reel link"},
+    "9895": {"name": "Instagram Indian Followers", "rate": 120.0, "min": 50, "max": 50000, "link_type": "Instagram Profile link"}
+}
+
 # POLLINATIONS AI & MEDIA CONFIG
 POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY") or "sk_T1yQaq7ay5S6l1QdjepQtMh0ak8F1SJi"
-IMAGE_FEE = 2.0    # ₹2 per AI image generation
-REMBG_FEE = 1.0    # ₹1 per background removal cutout
-ENHANCE_FEE = 1.0  # ₹1 per 4K photo enhancement
+IMAGE_FEE = 2.0
+REMBG_FEE = 1.0
+ENHANCE_FEE = 1.0
 
 # AI & DB CONFIG
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -84,7 +92,6 @@ def release_db_connection(conn, close=False):
     except Exception:
         pass
 
-last_purchase_time = {}
 admin_actions = {}
 admin_coupon_flow = {}
 user_orders = {}
@@ -98,8 +105,9 @@ waiting_for_enhance_photo = {}
 waiting_for_dl_link = {}
 user_temp_mails = {}
 waiting_for_smm_link = {}
+waiting_for_smm_qty = {}
 
-# --- COMPLETE MODS CATALOG ---
+# --- MODS CATALOG ---
 CATALOG = {
     # 1. Free Fire Non-Root
     "ff_nr_abcd": {
@@ -494,7 +502,7 @@ def fetch_instagram_direct_mp4(url):
             continue
     return None
 
-# --- MAIL.TM DISPOSABLE ENGINE ---
+# --- MAIL.TM ENGINE ---
 def mailtm_get_domain():
     try:
         r = requests.get("https://api.mail.tm/domains", timeout=10)
@@ -694,6 +702,7 @@ def handle_callback(call):
         waiting_for_enhance_photo.pop(user_id, None)
         waiting_for_dl_link.pop(user_id, None)
         waiting_for_smm_link.pop(user_id, None)
+        waiting_for_smm_qty.pop(user_id, None)
         admin_actions.pop(user_id, None)
         admin_coupon_flow.pop(user_id, None)
 
@@ -959,6 +968,7 @@ def handle_callback(call):
         else:
             bot.send_message(call.message.chat.id, "❌ Unable to load email content.", reply_markup=markup)
 
+    # --- SMM BOOSTING MENUS WITH CUSTOM QUANTITY ---
     elif call.data == "smm_main_menu":
         bot.answer_callback_query(call.id)
         smm_text = (
@@ -980,45 +990,69 @@ def handle_callback(call):
 
     elif call.data == "smm_cat_views":
         bot.answer_callback_query(call.id)
-        v_text = "🔥 **INSTAGRAM REELS VIEWS** (Service ID: 14686)\n⚡ Ultra-Fast 500k/Day Speed | Instant Start\n\nSelect a pack below:"
+        v_text = "🔥 **INSTAGRAM REELS VIEWS** (Service ID: 14686)\n⚡ Rate: ₹1 per 1,000 Views (Min: 100 | Max: 1,000,000)\n\nSelect a preset pack or type your own quantity:"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("⚡ 1,000 Views — ₹1", callback_data="smm_buy_14686_1000_1.0_IG_Reel_Views"))
         markup.add(telebot.types.InlineKeyboardButton("⚡ 5,000 Views — ₹5", callback_data="smm_buy_14686_5000_5.0_IG_Reel_Views"))
         markup.add(telebot.types.InlineKeyboardButton("⚡ 10,000 Views — ₹10", callback_data="smm_buy_14686_10000_10.0_IG_Reel_Views"))
         markup.add(telebot.types.InlineKeyboardButton("⚡ 50,000 Views — ₹45", callback_data="smm_buy_14686_50000_45.0_IG_Reel_Views"))
+        markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_14686"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
         bot.edit_message_text(v_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "smm_cat_tg":
         bot.answer_callback_query(call.id)
-        tg_text = "👥 **TELEGRAM CHANNEL MEMBERS** (Service ID: 14811)\n🛡️ Non-Drop | 30 Days Refill Guarantee | 10k/hr Speed\n\nSelect a pack below:"
+        tg_text = "👥 **TELEGRAM CHANNEL MEMBERS** (Service ID: 14811)\n🛡️ Rate: ₹35 per 1,000 Members (Min: 100 | Max: 100,000)\n\nSelect a preset pack or type your own quantity:"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("👥 500 Members — ₹18", callback_data="smm_buy_14811_500_18.0_TG_Members"))
         markup.add(telebot.types.InlineKeyboardButton("👥 1,000 Members — ₹35", callback_data="smm_buy_14811_1000_35.0_TG_Members"))
         markup.add(telebot.types.InlineKeyboardButton("👥 2,000 Members — ₹70", callback_data="smm_buy_14811_2000_70.0_TG_Members"))
         markup.add(telebot.types.InlineKeyboardButton("👥 5,000 Members — ₹170", callback_data="smm_buy_14811_5000_170.0_TG_Members"))
+        markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_14811"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
         bot.edit_message_text(tg_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "smm_cat_likes":
         bot.answer_callback_query(call.id)
-        lk_text = "❤️ **INSTAGRAM INDIAN LIKES** (Service ID: 14166)\n🇮🇳 100% Indian Profiles | Instant Start | Low Drop\n\nSelect a pack below:"
+        lk_text = "❤️ **INSTAGRAM INDIAN LIKES** (Service ID: 14166)\n🇮🇳 Rate: ₹20 per 1,000 Likes (Min: 50 | Max: 50,000)\n\nSelect a preset pack or type your own quantity:"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("❤️ 100 Likes — ₹3", callback_data="smm_buy_14166_100_3.0_IG_Likes"))
         markup.add(telebot.types.InlineKeyboardButton("❤️ 500 Likes — ₹12", callback_data="smm_buy_14166_500_12.0_IG_Likes"))
         markup.add(telebot.types.InlineKeyboardButton("❤️ 1,000 Likes — ₹20", callback_data="smm_buy_14166_1000_20.0_IG_Likes"))
+        markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_14166"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
         bot.edit_message_text(lk_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "smm_cat_followers":
         bot.answer_callback_query(call.id)
-        fol_text = "🇮🇳 **INSTAGRAM INDIAN FOLLOWERS** (Service ID: 9895)\n🇮🇳 Real Indian Accounts with Posts | 30 Days Refill\n\nSelect a pack below:"
+        fol_text = "🇮🇳 **INSTAGRAM INDIAN FOLLOWERS** (Service ID: 9895)\n🇮🇳 Rate: ₹120 per 1,000 Followers (Min: 50 | Max: 50,000)\n\nSelect a preset pack or type your own quantity:"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🇮🇳 100 Followers — ₹15", callback_data="smm_buy_9895_100_15.0_IG_Followers"))
         markup.add(telebot.types.InlineKeyboardButton("🇮🇳 500 Followers — ₹65", callback_data="smm_buy_9895_500_65.0_IG_Followers"))
         markup.add(telebot.types.InlineKeyboardButton("🇮🇳 1,000 Followers — ₹120", callback_data="smm_buy_9895_1000_120.0_IG_Followers"))
+        markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_9895"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
         bot.edit_message_text(fol_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data.startswith("smm_custom_"):
+        bot.answer_callback_query(call.id)
+        srv_id = call.data.replace("smm_custom_", "")
+        srv = SMM_SERVICES.get(srv_id)
+        if not srv:
+            bot.send_message(call.message.chat.id, "Service not found.")
+            return
+
+        waiting_for_smm_qty[user_id] = srv_id
+        markup = telebot.types.InlineKeyboardMarkup().add(
+            telebot.types.InlineKeyboardButton("🔙 Cancel", callback_data="smm_main_menu")
+        )
+        bot.edit_message_text(
+            f"✍️ **CUSTOM ORDER: {srv['name']}**\n\n"
+            f"📊 **Limits:** Min {srv['min']:,} — Max {srv['max']:,}\n"
+            f"💰 **Rate:** ₹{srv['rate']} per 1,000\n\n"
+            f"👇 **Reply with the exact quantity you want (e.g. `2500`):**",
+            call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
+        )
 
     elif call.data.startswith("smm_buy_"):
         bot.answer_callback_query(call.id)
@@ -1405,7 +1439,7 @@ def handle_callback(call):
         prompt = "Send: `USER_ID AMOUNT`" if act in ["addbal", "cutbal"] else "Send: `USER_ID`"
         bot.send_message(call.message.chat.id, f"💬 {prompt}", parse_mode="Markdown")
 
-# --- RESELLER PURCHASE API DISPATCH (UPDATED DOMAIN & RELIABILITY) ---
+# --- RESELLER PURCHASE API DISPATCH ---
 def execute_purchase(call, user_id, product_id, duration_text, price_inr, product_name):
     fresh_user = get_user(user_id)
     if not fresh_user or fresh_user["balance"] < price_inr:
@@ -1424,7 +1458,6 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
     atomic_update_balance(user_id, -price_inr, spend_add=price_inr, order_add=1)
     proc_msg = bot.send_message(call.message.chat.id, f"⏳ Contacting panel for {product_name}...")
 
-    # Parameters aligned with direct V2 products (no device code required)
     payload = {
         'api_key': BANTI_API_KEY,
         'action': 'buy',
@@ -1488,6 +1521,71 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
         log_bot_transaction(user_id, "REFUND", price_inr, f"Exception - Refunded for {product_name}")
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         bot.send_message(call.message.chat.id, f"⚠️ Connection error, balance refunded: {str(e)}", reply_markup=markup)
+
+# --- SMM CUSTOM QUANTITY INPUT HANDLER ---
+@bot.message_handler(func=lambda m: m.from_user.id in waiting_for_smm_qty)
+def handle_smm_custom_quantity(message):
+    user_id = message.from_user.id
+    srv_id = waiting_for_smm_qty.pop(user_id, None)
+    srv = SMM_SERVICES.get(srv_id)
+    if not srv:
+        return
+
+    text = message.text.strip()
+    if text.startswith("/"):
+        bot.send_message(message.chat.id, "❌ Custom order canceled.")
+        return
+
+    try:
+        qty = int(text)
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Please enter a valid whole number (e.g. `1500`).")
+        return
+
+    if qty < srv["min"] or qty > srv["max"]:
+        bot.send_message(message.chat.id, f"❌ Quantity out of range! Minimum is {srv['min']:,} and maximum is {srv['max']:,}.")
+        return
+
+    calculated_cost = round((qty / 1000.0) * srv["rate"], 2)
+    if calculated_cost < 0.50:
+        calculated_cost = 0.50
+
+    fresh_user = get_user(user_id)
+    if not fresh_user or fresh_user["balance"] < calculated_cost:
+        cur_b = fresh_user["balance"] if fresh_user else 0.0
+        bot.send_message(
+            message.chat.id,
+            f"❌ **Insufficient Balance!**\n"
+            f"Required: ₹{calculated_cost:.2f} | Balance: ₹{cur_b:.2f}\n\n"
+            f"Please add funds to place this order.",
+            parse_mode="Markdown",
+            reply_markup=telebot.types.InlineKeyboardMarkup().add(
+                telebot.types.InlineKeyboardButton("💳 Add Balance Now", callback_data="add_balance"),
+                telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu")
+            )
+        )
+        return
+
+    waiting_for_smm_link[user_id] = {
+        "service_id": srv_id,
+        "quantity": qty,
+        "cost": calculated_cost,
+        "name": srv["name"]
+    }
+
+    markup = telebot.types.InlineKeyboardMarkup().add(
+        telebot.types.InlineKeyboardButton("🔙 Cancel & Back", callback_data="smm_main_menu")
+    )
+    bot.send_message(
+        message.chat.id,
+        f"🛒 **Confirm Custom Order: {srv['name']}**\n\n"
+        f"📦 **Quantity:** {qty:,}\n"
+        f"💰 **Total Cost:** ₹{calculated_cost:.2f}\n\n"
+        f"👇 **Reply with your {srv['link_type']}:**\n"
+        f"*(Make sure your account/channel is set to PUBLIC)*",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
 
 # --- SMM LINK RECEIVER ---
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_smm_link)
