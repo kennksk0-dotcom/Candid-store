@@ -1,4 +1,4 @@
-import os
+import osk
 import telebot
 import requests
 import psycopg2
