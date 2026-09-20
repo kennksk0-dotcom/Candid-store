@@ -46,10 +46,10 @@ BANTI_MASTER_KEY = os.environ.get("BANTI_MASTER_KEY") or "a7f3e8b2c9d1f4a6b8c2d5
 AAPKA_API_URL = "https://aapkaprovider.com/api/v2"
 AAPKA_API_KEY = os.environ.get("AAPKA_API_KEY") or "64e5f851a708586e575c1e76719bd653"
 
-# SMM SERVICE RATES & LIMITS
+# SMM SERVICE RATES & REAL MINIMUM LIMITS
 SMM_SERVICES = {
     "14686": {"name": "Instagram Reel Views", "rate": 1.0, "min": 100, "max": 1000000, "link_type": "Instagram Reel/Post link"},
-    "14811": {"name": "Telegram Channel Members", "rate": 35.0, "min": 100, "max": 100000, "link_type": "Public Telegram Channel/Group link (https://t.me/...)"},
+    "14811": {"name": "Telegram Channel Members", "rate": 35.0, "min": 500, "max": 100000, "link_type": "Public Telegram Channel/Group link (https://t.me/...)"},
     "14166": {"name": "Instagram Indian Likes", "rate": 20.0, "min": 50, "max": 50000, "link_type": "Instagram Post/Reel link"},
     "9895": {"name": "Instagram Indian Followers", "rate": 120.0, "min": 50, "max": 50000, "link_type": "Instagram Profile link"}
 }
@@ -1002,7 +1002,7 @@ def handle_callback(call):
 
     elif call.data == "smm_cat_tg":
         bot.answer_callback_query(call.id)
-        tg_text = "👥 **TELEGRAM CHANNEL MEMBERS** (Service ID: 14811)\n🛡️ Rate: ₹35 per 1,000 Members (Min: 100 | Max: 100,000)\n\nSelect a preset pack or type your own quantity:"
+        tg_text = "👥 **TELEGRAM CHANNEL MEMBERS** (Service ID: 14811)\n🛡️ Rate: ₹35 per 1,000 Members (Min: 500 | Max: 100,000)\n\nSelect a preset pack or type your own quantity:"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("👥 500 Members — ₹18", callback_data="smm_buy_14811_500_18.0_TG_Members"))
         markup.add(telebot.types.InlineKeyboardButton("👥 1,000 Members — ₹35", callback_data="smm_buy_14811_1000_35.0_TG_Members"))
@@ -2272,5 +2272,12 @@ def handle_admin_action(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Invalid user ID.")
 
+# --- SAFE STARTUP: DELETE OLD WEBHOOK BEFORE POLLING ---
+try:
+    bot.delete_webhook(drop_pending_updates=True)
+    print("Old webhook deleted. Ready for polling.")
+except Exception as e:
+    print(f"Webhook clear warning: {e}")
+
 print("Bot is up and running.")
-bot.infinity_polling()
+bot.infinity_polling(skip_pending=True)
