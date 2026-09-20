@@ -75,7 +75,9 @@ AI_INSTRUCTION = (
 )
 
 STORE_UNDER_MAINTENANCE = False
-bot = telebot.TeleBot(BOT_TOKEN)
+
+# HIGH-CONCURRENCY BOT INITIALIZATION (Prevents Thread Starvation)
+bot = telebot.TeleBot(BOT_TOKEN, num_threads=25, threaded=True)
 
 # DB Connection Pool
 db_pool = pool.ThreadedConnectionPool(2, 30, SUPABASE_DB_URL, sslmode='require', connect_timeout=5)
@@ -106,6 +108,15 @@ waiting_for_dl_link = {}
 user_temp_mails = {}
 waiting_for_smm_link = {}
 waiting_for_smm_qty = {}
+
+# --- HELPER: SAFE EDIT TO PREVENT 'MESSAGE NOT MODIFIED' CRASHES ---
+def safe_edit_message_text(text, chat_id, message_id, **kwargs):
+    try:
+        return bot.edit_message_text(text, chat_id, message_id, **kwargs)
+    except telebot.apihelper.ApiTelegramException as e:
+        if "message is not modified" in str(e).lower():
+            return None
+        raise e
 
 # --- MODS CATALOG ---
 CATALOG = {
@@ -664,13 +675,23 @@ def show_main_menu(chat_id, user_id):
 
     bot.send_message(chat_id, welcome_text, reply_markup=markup, parse_mode="Markdown")
 
-# --- CALLBACK DISPATCHER ---
+# --- INSTANT-RESPONSE CALLBACK DISPATCHER ---
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
+    # FAST-ACK: Instantly dismiss Telegram spinner for all navigation events
+    if call.data not in ["maint_click_alert", "do_lucky_spin"]:
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+
     user_id = call.from_user.id
     user = get_user(user_id)
     if user and user["banned"]:
-        bot.answer_callback_query(call.id, text="❌ Access Denied: Account Suspended.", show_alert=True)
+        try:
+            bot.answer_callback_query(call.id, text="❌ Access Denied: Account Suspended.", show_alert=True)
+        except Exception:
+            pass
         return
 
     is_admin = (user_id == ADMIN_ID)
@@ -684,7 +705,6 @@ def handle_callback(call):
         "temp_mail_menu", "open_image_gen", "open_rembg", "open_enhance", "open_downloader"
     ]
     if STORE_UNDER_MAINTENANCE and not is_admin and call.data not in admin_bypass:
-        bot.answer_callback_query(call.id, text="Store under maintenance!", show_alert=True)
         bot.send_message(call.message.chat.id, "🛠️ **STORE UNDER MAINTENANCE**\n\nPlease check back shortly.", parse_mode="Markdown")
         return
 
@@ -707,11 +727,9 @@ def handle_callback(call):
         admin_coupon_flow.pop(user_id, None)
 
     if call.data == "main_menu":
-        bot.answer_callback_query(call.id)
         show_main_menu(call.message.chat.id, user_id)
 
     elif call.data == "mods_game_select":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🔥 Free Fire (FF)", callback_data="game_ff"))
         markup.add(telebot.types.InlineKeyboardButton("🎯 Call of Duty Mobile (CODM)", callback_data="game_codm"))
@@ -722,20 +740,18 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🍏 iOS Gbox Certificates", callback_data="prod_ios_certs"))
         markup.add(telebot.types.InlineKeyboardButton("🛠️ Maintenance Products", callback_data="show_maint_list"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
-        bot.edit_message_text("🎮 **— SELECT A GAME —**\n\nChoose your game to view available mods:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🎮 **— SELECT A GAME —**\n\nChoose your game to view available mods:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "game_ff":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("⚡ Non-Root", callback_data="ff_plat_nr"))
         markup.add(telebot.types.InlineKeyboardButton("🛡️ Root", callback_data="ff_plat_root"))
         markup.add(telebot.types.InlineKeyboardButton("🍏 iOS (iPhone)", callback_data="ff_plat_ios"))
         markup.add(telebot.types.InlineKeyboardButton("💻 PC Version", callback_data="prod_ff_pc_brmod"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text("🔥 **FREE FIRE — SELECT PLATFORM**\n\nChoose your device setup:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🔥 **FREE FIRE — SELECT PLATFORM**\n\nChoose your device setup:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "ff_plat_nr":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🛒 ABCD Panel Nonroot", callback_data="prod_ff_nr_abcd"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 Bala Mod Nonroot", callback_data="prod_ff_nr_bala"))
@@ -752,10 +768,9 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🛒 Aim Hack Nonroot/Root", callback_data="prod_ff_nr_aimhack"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 Pato Team Android", callback_data="prod_ff_nr_pato"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to FF Platforms", callback_data="game_ff"))
-        bot.edit_message_text("⚡ **FREE FIRE (NON-ROOT) MODS**\n\nSelect a mod to view duration packs:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("⚡ **FREE FIRE (NON-ROOT) MODS**\n\nSelect a mod to view duration packs:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "ff_plat_root":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🛒 Silent Cheat Root Android", callback_data="prod_ff_r_silent"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 Haxx-Cker Pro Root", callback_data="prod_ff_r_haxx"))
@@ -763,57 +778,50 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🛒 DripClient Root", callback_data="prod_ff_r_drip"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 HG Cheats Apkmod Root", callback_data="prod_ff_r_hg"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to FF Platforms", callback_data="game_ff"))
-        bot.edit_message_text("🛡️ **FREE FIRE (ROOT) MODS**\n\nSelect a mod to view duration packs:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🛡️ **FREE FIRE (ROOT) MODS**\n\nSelect a mod to view duration packs:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "ff_plat_ios":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🛒 Migul iPhone iOS FF", callback_data="prod_ff_ios_migul"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 Delta Proxy iOS iPhone", callback_data="prod_ff_ios_delta"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to FF Platforms", callback_data="game_ff"))
-        bot.edit_message_text("🍏 **FREE FIRE (IOS IPHONE) MODS**\n\nSelect a mod to view duration packs:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🍏 **FREE FIRE (IOS IPHONE) MODS**\n\nSelect a mod to view duration packs:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "game_codm":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🛒 iOS Cloud CODM (30 Days)", callback_data="prod_codm_ios_cloud"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        bot.edit_message_text("🎯 **CALL OF DUTY MOBILE (CODM)**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🎯 **CALL OF DUTY MOBILE (CODM)**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "game_mlbb":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🛒 Fluorite iOS MLBB", callback_data="prod_mlbb_ios_fluorite"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        bot.edit_message_text("⚔️ **MOBILE LEGENDS (MLBB)**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("⚔️ **MOBILE LEGENDS (MLBB)**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "game_8bp":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🛒 Snake 8 Ball Pool Nonroot", callback_data="prod_8bp_snake_nr"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 KOS 8 Ball Pool Virtual", callback_data="prod_8bp_kos_virtual"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 KOS 8 Ball Pool Mod+Root", callback_data="prod_8bp_kos_root"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 iOS Fluorite 8 Ball Pool", callback_data="prod_8bp_ios_fluorite"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        bot.edit_message_text("🎱 **8 BALL POOL MODS**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🎱 **8 BALL POOL MODS**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "game_carrom":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🛒 Snake Carrom Pool Nonroot", callback_data="prod_carrom_snake_nr"))
         markup.add(telebot.types.InlineKeyboardButton("🛒 KOS Carrom Pool Nonroot", callback_data="prod_carrom_kos_nr"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        bot.edit_message_text("⚪ **CARROM POOL MODS**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("⚪ **CARROM POOL MODS**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "game_soccer":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🛒 Snake Soccer Stars Nonroot", callback_data="prod_soccer_snake_nr"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        bot.edit_message_text("⚽ **SNAKE SOCCER STARS MODS**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("⚽ **SNAKE SOCCER STARS MODS**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data.startswith("prod_"):
-        bot.answer_callback_query(call.id)
         prod_key = call.data.replace("prod_", "")
         data = CATALOG.get(prod_key)
         if not data:
@@ -825,7 +833,7 @@ def handle_callback(call):
             markup.add(telebot.types.InlineKeyboardButton(f"{dur} — ₹{int(price)}", callback_data=f"buykey_{prod_key}_{idx}"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Game Catalog", callback_data="mods_game_select"))
 
-        bot.edit_message_text(
+        safe_edit_message_text(
             f"🛒 **{data['name']}**\n📌 Select a duration pack below:",
             call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
         )
@@ -837,33 +845,32 @@ def handle_callback(call):
 
         product = CATALOG.get(prod_key)
         if not product:
-            bot.answer_callback_query(call.id, text="Product expired.", show_alert=True)
+            bot.send_message(call.message.chat.id, "Product expired.")
             return
 
         duration_text, price_inr = product["items"][idx]
         pid = product["pid"]
         product_name = product["name"]
-
-        bot.answer_callback_query(call.id, text="Processing order...")
         execute_purchase(call, user_id, pid, duration_text, price_inr, product_name)
 
     elif call.data == "show_maint_list":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         for p in MAINTENANCE_PRODUCTS:
             markup.add(telebot.types.InlineKeyboardButton(f"🛠️ {p[:28]}...", callback_data="maint_click_alert"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        bot.edit_message_text("🛠️ **PRODUCTS CURRENTLY UNDER MAINTENANCE**\n\nTap any product to view status:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🛠️ **PRODUCTS CURRENTLY UNDER MAINTENANCE**\n\nTap any product to view status:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "maint_click_alert":
-        bot.answer_callback_query(
-            call.id,
-            text="⚠️ UNDER MAINTENANCE!\nThis product is being updated by developers. No keys can be purchased right now.",
-            show_alert=True
-        )
+        try:
+            bot.answer_callback_query(
+                call.id,
+                text="⚠️ UNDER MAINTENANCE!\nThis product is being updated by developers. No keys can be purchased right now.",
+                show_alert=True
+            )
+        except Exception:
+            pass
 
     elif call.data == "open_downloader":
-        bot.answer_callback_query(call.id)
         waiting_for_dl_link[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
@@ -884,10 +891,9 @@ def handle_callback(call):
                 pass
             bot.send_message(call.message.chat.id, dl_text, parse_mode="Markdown", reply_markup=markup)
         else:
-            bot.edit_message_text(dl_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+            safe_edit_message_text(dl_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "temp_mail_menu":
-        bot.answer_callback_query(call.id)
         current = user_temp_mails.get(user_id)
         markup = telebot.types.InlineKeyboardMarkup()
         if current:
@@ -907,10 +913,9 @@ def handle_callback(call):
             )
             markup.add(telebot.types.InlineKeyboardButton("⚡ Generate Free Email", callback_data="tmail_gen_new"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
-        bot.edit_message_text(text_body, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(text_body, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "tmail_gen_new":
-        bot.answer_callback_query(call.id, text="Creating inbox...")
         addr, token = mailtm_create_account()
         if addr and token:
             user_temp_mails[user_id] = {"address": addr, "token": token}
@@ -918,7 +923,7 @@ def handle_callback(call):
             markup.add(telebot.types.InlineKeyboardButton("🔄 Check Inbox", callback_data="tmail_inbox"))
             markup.add(telebot.types.InlineKeyboardButton("⚡ Generate Another", callback_data="tmail_gen_new"))
             markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-            bot.edit_message_text(
+            safe_edit_message_text(
                 f"🎉 **Free Temporary Mail Ready!**\n\n📧 **Address:**\n`{addr}`\n\n"
                 "*(Tap to copy)*\n\nOnce you request an OTP on a website/app, tap **🔄 Check Inbox** below.",
                 call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
@@ -927,10 +932,9 @@ def handle_callback(call):
             bot.send_message(call.message.chat.id, "⚠️ Failed to connect to mail server. Try again in 5 seconds.")
 
     elif call.data == "tmail_inbox":
-        bot.answer_callback_query(call.id, text="Checking inbox...")
         current = user_temp_mails.get(user_id)
         if not current:
-            bot.answer_callback_query(call.id, text="Generate an email first.", show_alert=True)
+            bot.send_message(call.message.chat.id, "Generate an email first.")
             return
 
         msgs = mailtm_fetch_messages(current["token"])
@@ -950,10 +954,9 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🔄 Refresh Inbox", callback_data="tmail_inbox"))
         markup.add(telebot.types.InlineKeyboardButton("⚡ New Email", callback_data="tmail_gen_new"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Temp Mail", callback_data="temp_mail_menu"))
-        bot.edit_message_text(inbox_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(inbox_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data.startswith("tmail_read_"):
-        bot.answer_callback_query(call.id)
         current = user_temp_mails.get(user_id)
         if not current:
             return
@@ -964,13 +967,12 @@ def handle_callback(call):
             sender = detail.get("from", {}).get("address", "Unknown")
             subject = detail.get("subject", "(No Subject)")
             text_body = detail.get("text", "(No Body)")
-            bot.edit_message_text(f"📩 **MESSAGE DETAILS**\n\n👤 From: `{sender}`\n📌 Subject: {subject}\n\n📝 Body:\n{text_body[:3500]}", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+            safe_edit_message_text(f"📩 **MESSAGE DETAILS**\n\n👤 From: `{sender}`\n📌 Subject: {subject}\n\n📝 Body:\n{text_body[:3500]}", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
         else:
             bot.send_message(call.message.chat.id, "❌ Unable to load email content.", reply_markup=markup)
 
     # --- SMM BOOSTING MENUS WITH CUSTOM QUANTITY ---
     elif call.data == "smm_main_menu":
-        bot.answer_callback_query(call.id)
         smm_text = (
             "🚀 **— SOCIAL MEDIA BOOSTING HUB —** 🚀\n\n"
             "Boost your reach with instant automated delivery:\n\n"
@@ -986,10 +988,9 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("❤️ IG Indian Likes", callback_data="smm_cat_likes"))
         markup.add(telebot.types.InlineKeyboardButton("🇮🇳 IG Indian Followers", callback_data="smm_cat_followers"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
-        bot.edit_message_text(smm_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(smm_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "smm_cat_views":
-        bot.answer_callback_query(call.id)
         v_text = "🔥 **INSTAGRAM REELS VIEWS** (Service ID: 14686)\n⚡ Rate: ₹1 per 1,000 Views (Min: 100 | Max: 1,000,000)\n\nSelect a preset pack or type your own quantity:"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("⚡ 1,000 Views — ₹1", callback_data="smm_buy_14686_1000_1.0_IG_Reel_Views"))
@@ -998,10 +999,9 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("⚡ 50,000 Views — ₹45", callback_data="smm_buy_14686_50000_45.0_IG_Reel_Views"))
         markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_14686"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
-        bot.edit_message_text(v_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(v_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "smm_cat_tg":
-        bot.answer_callback_query(call.id)
         tg_text = "👥 **TELEGRAM CHANNEL MEMBERS** (Service ID: 14811)\n🛡️ Rate: ₹35 per 1,000 Members (Min: 500 | Max: 100,000)\n\nSelect a preset pack or type your own quantity:"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("👥 500 Members — ₹18", callback_data="smm_buy_14811_500_18.0_TG_Members"))
@@ -1010,10 +1010,9 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("👥 5,000 Members — ₹170", callback_data="smm_buy_14811_5000_170.0_TG_Members"))
         markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_14811"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
-        bot.edit_message_text(tg_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(tg_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "smm_cat_likes":
-        bot.answer_callback_query(call.id)
         lk_text = "❤️ **INSTAGRAM INDIAN LIKES** (Service ID: 14166)\n🇮🇳 Rate: ₹20 per 1,000 Likes (Min: 50 | Max: 50,000)\n\nSelect a preset pack or type your own quantity:"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("❤️ 100 Likes — ₹3", callback_data="smm_buy_14166_100_3.0_IG_Likes"))
@@ -1021,10 +1020,9 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("❤️ 1,000 Likes — ₹20", callback_data="smm_buy_14166_1000_20.0_IG_Likes"))
         markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_14166"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
-        bot.edit_message_text(lk_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(lk_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "smm_cat_followers":
-        bot.answer_callback_query(call.id)
         fol_text = "🇮🇳 **INSTAGRAM INDIAN FOLLOWERS** (Service ID: 9895)\n🇮🇳 Rate: ₹120 per 1,000 Followers (Min: 50 | Max: 50,000)\n\nSelect a preset pack or type your own quantity:"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("🇮🇳 100 Followers — ₹15", callback_data="smm_buy_9895_100_15.0_IG_Followers"))
@@ -1032,10 +1030,9 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🇮🇳 1,000 Followers — ₹120", callback_data="smm_buy_9895_1000_120.0_IG_Followers"))
         markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_9895"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
-        bot.edit_message_text(fol_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(fol_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data.startswith("smm_custom_"):
-        bot.answer_callback_query(call.id)
         srv_id = call.data.replace("smm_custom_", "")
         srv = SMM_SERVICES.get(srv_id)
         if not srv:
@@ -1046,7 +1043,7 @@ def handle_callback(call):
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("🔙 Cancel", callback_data="smm_main_menu")
         )
-        bot.edit_message_text(
+        safe_edit_message_text(
             f"✍️ **CUSTOM ORDER: {srv['name']}**\n\n"
             f"📊 **Limits:** Min {srv['min']:,} — Max {srv['max']:,}\n"
             f"💰 **Rate:** ₹{srv['rate']} per 1,000\n\n"
@@ -1055,7 +1052,6 @@ def handle_callback(call):
         )
 
     elif call.data.startswith("smm_buy_"):
-        bot.answer_callback_query(call.id)
         parts = call.data.split("_")
         srv_id = parts[2]
         qty = int(parts[3])
@@ -1097,10 +1093,9 @@ def handle_callback(call):
             f"👇 **Reply with {instruction}:**\n"
             "*(Make sure your account/channel is PUBLIC)*"
         )
-        bot.edit_message_text(prompt_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(prompt_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "open_image_gen":
-        bot.answer_callback_query(call.id)
         waiting_for_image_prompt[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
@@ -1119,10 +1114,9 @@ def handle_callback(call):
                 pass
             bot.send_message(call.message.chat.id, text_prompt, parse_mode="Markdown", reply_markup=markup)
         else:
-            bot.edit_message_text(text_prompt, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+            safe_edit_message_text(text_prompt, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "open_rembg":
-        bot.answer_callback_query(call.id)
         waiting_for_rembg_photo[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
@@ -1140,10 +1134,9 @@ def handle_callback(call):
                 pass
             bot.send_message(call.message.chat.id, rembg_text, parse_mode="Markdown", reply_markup=markup)
         else:
-            bot.edit_message_text(rembg_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+            safe_edit_message_text(rembg_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "open_enhance":
-        bot.answer_callback_query(call.id)
         waiting_for_enhance_photo[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
@@ -1161,21 +1154,19 @@ def handle_callback(call):
                 pass
             bot.send_message(call.message.chat.id, enh_text, parse_mode="Markdown", reply_markup=markup)
         else:
-            bot.edit_message_text(enh_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+            safe_edit_message_text(enh_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "add_balance":
-        bot.answer_callback_query(call.id)
         waiting_for_custom_topup[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         fresh_user = get_user(user_id)
-        bot.edit_message_text(
+        safe_edit_message_text(
             f"💰 **— ADD BALANCE —** 💰\n\n💳 Current Balance: ₹{fresh_user['balance']:.2f}\n\n"
             "👇 **Reply with the amount in Rupees to add (e.g. `100`):**",
             call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
         )
 
     elif call.data == "cancel_topup":
-        bot.answer_callback_query(call.id, text="Top-up canceled.")
         user_orders.pop(user_id, None)
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -1184,7 +1175,6 @@ def handle_callback(call):
         bot.send_message(call.message.chat.id, "❌ Top-up canceled.", reply_markup=telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")))
 
     elif call.data == "profile":
-        bot.answer_callback_query(call.id)
         fresh = get_user(user_id)
         role = "👑 Master Admin" if is_admin else f"👤 {fresh['role']}"
         status_badge = "🚫 Banned" if fresh["banned"] else "🟢 Verified & Active"
@@ -1227,10 +1217,9 @@ def handle_callback(call):
                 pass
             bot.send_message(call.message.chat.id, profile_text, parse_mode="Markdown", reply_markup=markup)
         else:
-            bot.edit_message_text(profile_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+            safe_edit_message_text(profile_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "orders":
-        bot.answer_callback_query(call.id)
         conn = get_db_connection()
         try:
             cur = conn.cursor()
@@ -1249,19 +1238,17 @@ def handle_callback(call):
             for r in rows:
                 text_hist += f"🛒 {r[0]}\n🔑 `{r[1]}`\n💰 ₹{r[2]} | 📅 {r[3]}\n-------------------\n"
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text(text_hist, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(text_hist, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "referral":
-        bot.answer_callback_query(call.id)
         bot_username = bot.get_me().username
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text(
+        safe_edit_message_text(
             f"🎁 **REFERRAL PROGRAM**\n\nShare your link to invite friends:\n`https://t.me/{bot_username}?start=ref_{user_id}`",
             call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
         )
 
     elif call.data == "lucky_spin":
-        bot.answer_callback_query(call.id)
         fresh = get_user(user_id)
         bonus_spins = fresh.get("bonus_spins", 0)
         last_spin = fresh.get("last_spin_time")
@@ -1279,7 +1266,7 @@ def handle_callback(call):
         if can_spin:
             markup.add(telebot.types.InlineKeyboardButton("🎯 SPIN NOW", callback_data="do_lucky_spin"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text("🎡 **LUCKY SPIN SYSTEM**\n\nSpin daily to win free wallet rewards!", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🎡 **LUCKY SPIN SYSTEM**\n\nSpin daily to win free wallet rewards!", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "do_lucky_spin":
         reward = random.choice([0, 0, 0, 1, 1, 2, 5])
@@ -1296,39 +1283,38 @@ def handle_callback(call):
         finally:
             release_db_connection(conn)
 
-        bot.answer_callback_query(call.id, text=f"Reward: ₹{reward}", show_alert=True)
+        try:
+            bot.answer_callback_query(call.id, text=f"Reward: ₹{reward}", show_alert=True)
+        except Exception:
+            pass
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         res_msg = f"🎉 Won ₹{reward} balance!" if reward > 0 else "😢 No reward this time!"
-        bot.edit_message_text(f"🎡 **SPIN RESULT**\n\n{res_msg}", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(f"🎡 **SPIN RESULT**\n\n{res_msg}", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "support_ticket":
-        bot.answer_callback_query(call.id)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("💳 Payment Issue", callback_data="tkt_Payment"))
         markup.add(telebot.types.InlineKeyboardButton("🔑 Mod Key Issue", callback_data="tkt_Key"))
         markup.add(telebot.types.InlineKeyboardButton("🚀 SMM Boosting Issue", callback_data="tkt_SMM"))
         markup.add(telebot.types.InlineKeyboardButton("💬 Other Issue", callback_data="tkt_Other"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text("🎟️ **SUPPORT TICKET**\n\nSelect your category:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🎟️ **SUPPORT TICKET**\n\nSelect your category:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data.startswith("tkt_"):
-        bot.answer_callback_query(call.id)
         cat = call.data.replace("tkt_", "")
         waiting_for_support_ticket[user_id] = cat
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Cancel", callback_data="main_menu"))
-        bot.edit_message_text(f"🎟️ Category: `{cat}`\n\n👇 Reply with your issue/proof message:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(f"🎟️ Category: `{cat}`\n\n👇 Reply with your issue/proof message:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "redeem_coupon":
-        bot.answer_callback_query(call.id)
         waiting_for_coupon_code[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Cancel", callback_data="main_menu"))
-        bot.edit_message_text("🏷️ **REDEEM COUPON**\n\n👇 Reply with your code below:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🏷️ **REDEEM COUPON**\n\n👇 Reply with your code below:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "open_ai_assistant":
-        bot.answer_callback_query(call.id)
         waiting_for_ai_prompt[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text(
+        safe_edit_message_text(
             "🤖 **STORE AI ASSISTANT (Continuous Chat)**\n\n"
             "Ask me anything about mod keys, boosting packages, or store policies.\n\n"
             "👇 **Type your questions below:**",
@@ -1337,7 +1323,6 @@ def handle_callback(call):
 
     # MASTER ADMIN PANEL
     elif call.data == "admin_panel" and is_admin:
-        bot.answer_callback_query(call.id)
         m_status = "🔴 OFF (Active)" if not STORE_UNDER_MAINTENANCE else "🟢 ON (Maintenance)"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton(f"🛠️ Toggle Maintenance: {m_status}", callback_data="adm_toggle_maintenance"))
@@ -1352,20 +1337,17 @@ def handle_callback(call):
         markup.add(telebot.types.InlineKeyboardButton("🤝 Toggle Reseller Role", callback_data="adm_toggle_reseller"))
         markup.add(telebot.types.InlineKeyboardButton("📢 Broadcast Message", callback_data="adm_broadcast"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.edit_message_text("👑 **MASTER ADMIN PANEL**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("👑 **MASTER ADMIN PANEL**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "adm_toggle_maintenance" and is_admin:
         STORE_UNDER_MAINTENANCE = not STORE_UNDER_MAINTENANCE
-        bot.answer_callback_query(call.id, text=f"Maintenance is now {'ON' if STORE_UNDER_MAINTENANCE else 'OFF'}")
         handle_callback(type('obj', (object,), {'from_user': call.from_user, 'message': call.message, 'data': 'admin_panel', 'id': call.id}))
 
     elif call.data == "adm_create_coupon" and is_admin:
-        bot.answer_callback_query(call.id)
         admin_coupon_flow[user_id] = {"step": "code"}
         bot.send_message(call.message.chat.id, "🏷️ **CREATE COUPON**\n\nReply with the code name (e.g. `PROMO50`):", parse_mode="Markdown")
 
     elif call.data.startswith("adm_coupon_type_") and is_admin:
-        bot.answer_callback_query(call.id)
         r_type = call.data.split("_")[3]
         if user_id in admin_coupon_flow:
             admin_coupon_flow[user_id]["type"] = r_type
@@ -1374,7 +1356,6 @@ def handle_callback(call):
             bot.send_message(call.message.chat.id, val_prompt, parse_mode="Markdown")
 
     elif call.data == "adm_view_tickets" and is_admin:
-        bot.answer_callback_query(call.id)
         conn = get_db_connection()
         try:
             cur = conn.cursor()
@@ -1387,10 +1368,9 @@ def handle_callback(call):
             release_db_connection(conn)
         t_text = "🎟️ **RECENT TICKETS**\n\n" + ("\n".join([f"#{r[0]} | User: `{r[1]}` [{r[2]}]\n💬 {r[3]}" for r in rows]) if rows else "No open tickets.")
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
-        bot.edit_message_text(t_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(t_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data.startswith("adm_users_list_") and is_admin:
-        bot.answer_callback_query(call.id)
         conn = get_db_connection()
         try:
             cur = conn.cursor()
@@ -1403,10 +1383,9 @@ def handle_callback(call):
             release_db_connection(conn)
         u_text = "📋 **USERS REGISTERED (Last 15)**\n\n" + "\n".join([f"`{r[0]}` | {r[1]} | ₹{r[2]:.2f}" for r in rows])
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
-        bot.edit_message_text(u_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(u_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "adm_all_transactions" and is_admin:
-        bot.answer_callback_query(call.id)
         conn = get_db_connection()
         try:
             cur = conn.cursor()
@@ -1419,15 +1398,13 @@ def handle_callback(call):
             release_db_connection(conn)
         t_text = "📊 **LAST 15 TRANSACTIONS**\n\n" + "\n".join([f"`{r[0]}` | {r[1]} ₹{r[2]} | {r[3]}" for r in rows])
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
-        bot.edit_message_text(t_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(t_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "adm_broadcast" and is_admin:
-        bot.answer_callback_query(call.id)
         admin_actions[user_id] = "broadcast"
         bot.send_message(call.message.chat.id, "📢 Send your announcement text:")
 
     elif call.data in ["adm_addbal_menu", "adm_cutbal_menu", "adm_check_user", "adm_ban_menu", "adm_toggle_reseller"] and is_admin:
-        bot.answer_callback_query(call.id)
         act = {
             "adm_addbal_menu": "addbal",
             "adm_cutbal_menu": "cutbal",
