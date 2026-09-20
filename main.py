@@ -46,7 +46,7 @@ BANTI_MASTER_KEY = os.environ.get("BANTI_MASTER_KEY") or "a7f3e8b2c9d1f4a6b8c2d5
 AAPKA_API_URL = "https://aapkaprovider.com/api/v2"
 AAPKA_API_KEY = os.environ.get("AAPKA_API_KEY") or "64e5f851a708586e575c1e76719bd653"
 
-# SMM SERVICE RATES & REAL MINIMUM LIMITS
+# SMM SERVICE RATES & PROVIDER LIMITS
 SMM_SERVICES = {
     "14686": {"name": "Instagram Reel Views", "rate": 1.0, "min": 100, "max": 1000000, "link_type": "Instagram Reel/Post link"},
     "14811": {"name": "Telegram Channel Members", "rate": 35.0, "min": 500, "max": 100000, "link_type": "Public Telegram Channel/Group link (https://t.me/...)"},
@@ -76,23 +76,34 @@ AI_INSTRUCTION = (
 
 STORE_UNDER_MAINTENANCE = False
 
-# HIGH-CONCURRENCY BOT INITIALIZATION (Prevents Thread Starvation)
-bot = telebot.TeleBot(BOT_TOKEN, num_threads=25, threaded=True)
+# HIGH-CONCURRENCY BOT INITIALIZATION
+bot = telebot.TeleBot(BOT_TOKEN, num_threads=20, threaded=True)
 
-# DB Connection Pool
-db_pool = pool.ThreadedConnectionPool(2, 30, SUPABASE_DB_URL, sslmode='require', connect_timeout=5)
+# SAFE DATABASE CONNECTION POOL INITIALIZATION
+db_pool = None
+if SUPABASE_DB_URL:
+    try:
+        db_pool = pool.ThreadedConnectionPool(2, 25, SUPABASE_DB_URL, sslmode='require', connect_timeout=10)
+        print("Database connection pool successfully initialized.")
+    except Exception as e:
+        print(f"Database pool initialization error: {e}")
+else:
+    print("Warning: DATABASE_URL environment variable is missing!")
 
 def get_db_connection():
-    return db_pool.getconn()
+    if db_pool:
+        try:
+            return db_pool.getconn()
+        except Exception as e:
+            print(f"Error fetching connection from pool: {e}")
+    return None
 
 def release_db_connection(conn, close=False):
-    try:
-        if close:
-            db_pool.putconn(conn, close=True)
-        else:
-            db_pool.putconn(conn)
-    except Exception:
-        pass
+    if db_pool and conn:
+        try:
+            db_pool.putconn(conn, close=close)
+        except Exception:
+            pass
 
 admin_actions = {}
 admin_coupon_flow = {}
@@ -109,7 +120,7 @@ user_temp_mails = {}
 waiting_for_smm_link = {}
 waiting_for_smm_qty = {}
 
-# --- HELPER: SAFE EDIT TO PREVENT 'MESSAGE NOT MODIFIED' CRASHES ---
+# --- HELPER: SAFE EDIT TO AVOID 'MESSAGE NOT MODIFIED' CRASHES ---
 def safe_edit_message_text(text, chat_id, message_id, **kwargs):
     try:
         return bot.edit_message_text(text, chat_id, message_id, **kwargs)
@@ -288,6 +299,9 @@ MAINTENANCE_PRODUCTS = [
 
 def init_db():
     conn = get_db_connection()
+    if not conn:
+        print("Database not reachable during init_db, skipping.")
+        return
     try:
         cur = conn.cursor()
         cur.execute('''
@@ -371,6 +385,8 @@ init_db()
 
 def log_bot_transaction(user_id, tx_type, amount, details):
     conn = get_db_connection()
+    if not conn:
+        return
     try:
         cur = conn.cursor()
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -387,6 +403,8 @@ def log_bot_transaction(user_id, tx_type, amount, details):
 
 def get_user(user_id):
     conn = get_db_connection()
+    if not conn:
+        return None
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cur.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
@@ -416,6 +434,8 @@ def get_user(user_id):
 
 def save_user_profile(user_id, name, phone, verified=True):
     conn = get_db_connection()
+    if not conn:
+        return
     try:
         cur = conn.cursor()
         cur.execute('''
@@ -435,6 +455,8 @@ def save_user_profile(user_id, name, phone, verified=True):
 
 def atomic_update_balance(user_id, amount_change, spend_add=0, order_add=0):
     conn = get_db_connection()
+    if not conn:
+        return False
     try:
         cur = conn.cursor()
         cur.execute('''
@@ -582,13 +604,14 @@ def send_welcome(message):
             referrer_id = int(args[1].split("_")[1])
             if referrer_id != user_id and not user:
                 conn = get_db_connection()
-                try:
-                    cur = conn.cursor()
-                    cur.execute('UPDATE users SET total_referrals = total_referrals + 1 WHERE user_id = %s', (referrer_id,))
-                    conn.commit()
-                    cur.close()
-                finally:
-                    release_db_connection(conn)
+                if conn:
+                    try:
+                        cur = conn.cursor()
+                        cur.execute('UPDATE users SET total_referrals = total_referrals + 1 WHERE user_id = %s', (referrer_id,))
+                        conn.commit()
+                        cur.close()
+                    finally:
+                        release_db_connection(conn)
         except Exception:
             pass
 
@@ -678,7 +701,7 @@ def show_main_menu(chat_id, user_id):
 # --- INSTANT-RESPONSE CALLBACK DISPATCHER ---
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
-    # FAST-ACK: Instantly dismiss Telegram spinner for all navigation events
+    # FAST-ACK: Acknowledge callback immediately to remove button spinner
     if call.data not in ["maint_click_alert", "do_lucky_spin"]:
         try:
             bot.answer_callback_query(call.id)
@@ -1160,8 +1183,9 @@ def handle_callback(call):
         waiting_for_custom_topup[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         fresh_user = get_user(user_id)
+        current_bal = fresh_user['balance'] if fresh_user else 0.0
         safe_edit_message_text(
-            f"💰 **— ADD BALANCE —** 💰\n\n💳 Current Balance: ₹{fresh_user['balance']:.2f}\n\n"
+            f"💰 **— ADD BALANCE —** 💰\n\n💳 Current Balance: ₹{current_bal:.2f}\n\n"
             "👇 **Reply with the amount in Rupees to add (e.g. `100`):**",
             call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
         )
@@ -1176,6 +1200,9 @@ def handle_callback(call):
 
     elif call.data == "profile":
         fresh = get_user(user_id)
+        if not fresh:
+            bot.send_message(call.message.chat.id, "User not found.")
+            return
         role = "👑 Master Admin" if is_admin else f"👤 {fresh['role']}"
         status_badge = "🚫 Banned" if fresh["banned"] else "🟢 Verified & Active"
 
@@ -1221,15 +1248,17 @@ def handle_callback(call):
 
     elif call.data == "orders":
         conn = get_db_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT 10', (user_id,))
-            rows = cur.fetchall()
-            cur.close()
-        except Exception:
-            rows = []
-        finally:
-            release_db_connection(conn)
+        rows = []
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT 10', (user_id,))
+                rows = cur.fetchall()
+                cur.close()
+            except Exception:
+                rows = []
+            finally:
+                release_db_connection(conn)
 
         if not rows:
             text_hist = "📦 You have no past orders."
@@ -1250,8 +1279,8 @@ def handle_callback(call):
 
     elif call.data == "lucky_spin":
         fresh = get_user(user_id)
-        bonus_spins = fresh.get("bonus_spins", 0)
-        last_spin = fresh.get("last_spin_time")
+        bonus_spins = fresh.get("bonus_spins", 0) if fresh else 0
+        last_spin = fresh.get("last_spin_time") if fresh else None
         can_spin = (bonus_spins > 0)
         if not can_spin and last_spin:
             try:
@@ -1273,15 +1302,16 @@ def handle_callback(call):
         atomic_update_balance(user_id, float(reward))
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn = get_db_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute('UPDATE users SET last_spin_time = %s WHERE user_id = %s', (now_str, user_id))
-            conn.commit()
-            cur.close()
-        except Exception:
-            pass
-        finally:
-            release_db_connection(conn)
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute('UPDATE users SET last_spin_time = %s WHERE user_id = %s', (now_str, user_id))
+                conn.commit()
+                cur.close()
+            except Exception:
+                pass
+            finally:
+                release_db_connection(conn)
 
         try:
             bot.answer_callback_query(call.id, text=f"Reward: ₹{reward}", show_alert=True)
@@ -1357,45 +1387,51 @@ def handle_callback(call):
 
     elif call.data == "adm_view_tickets" and is_admin:
         conn = get_db_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute('SELECT id, user_id, category, message, date FROM support_tickets ORDER BY id DESC LIMIT 10')
-            rows = cur.fetchall()
-            cur.close()
-        except Exception:
-            rows = []
-        finally:
-            release_db_connection(conn)
+        rows = []
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute('SELECT id, user_id, category, message, date FROM support_tickets ORDER BY id DESC LIMIT 10')
+                rows = cur.fetchall()
+                cur.close()
+            except Exception:
+                rows = []
+            finally:
+                release_db_connection(conn)
         t_text = "🎟️ **RECENT TICKETS**\n\n" + ("\n".join([f"#{r[0]} | User: `{r[1]}` [{r[2]}]\n💬 {r[3]}" for r in rows]) if rows else "No open tickets.")
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
         safe_edit_message_text(t_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data.startswith("adm_users_list_") and is_admin:
         conn = get_db_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute('SELECT user_id, name, balance FROM users ORDER BY joined DESC LIMIT 15')
-            rows = cur.fetchall()
-            cur.close()
-        except Exception:
-            rows = []
-        finally:
-            release_db_connection(conn)
+        rows = []
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute('SELECT user_id, name, balance FROM users ORDER BY joined DESC LIMIT 15')
+                rows = cur.fetchall()
+                cur.close()
+            except Exception:
+                rows = []
+            finally:
+                release_db_connection(conn)
         u_text = "📋 **USERS REGISTERED (Last 15)**\n\n" + "\n".join([f"`{r[0]}` | {r[1]} | ₹{r[2]:.2f}" for r in rows])
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
         safe_edit_message_text(u_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "adm_all_transactions" and is_admin:
         conn = get_db_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute('SELECT user_id, type, amount, details, date FROM bot_transactions ORDER BY id DESC LIMIT 15')
-            rows = cur.fetchall()
-            cur.close()
-        except Exception:
-            rows = []
-        finally:
-            release_db_connection(conn)
+        rows = []
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute('SELECT user_id, type, amount, details, date FROM bot_transactions ORDER BY id DESC LIMIT 15')
+                rows = cur.fetchall()
+                cur.close()
+            except Exception:
+                rows = []
+            finally:
+                release_db_connection(conn)
         t_text = "📊 **LAST 15 TRANSACTIONS**\n\n" + "\n".join([f"`{r[0]}` | {r[1]} ₹{r[2]} | {r[3]}" for r in rows])
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
         safe_edit_message_text(t_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
@@ -1468,13 +1504,14 @@ def execute_purchase(call, user_id, product_id, duration_text, price_inr, produc
             log_bot_transaction(user_id, "PURCHASE", price_inr, f"Bought {product_name} ({duration_text})")
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = get_db_connection()
-            try:
-                cur = conn.cursor()
-                cur.execute('INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)', (user_id, duration_text, str(license_key), price_inr, now_str))
-                conn.commit()
-                cur.close()
-            finally:
-                release_db_connection(conn)
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute('INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)', (user_id, duration_text, str(license_key), price_inr, now_str))
+                    conn.commit()
+                    cur.close()
+                finally:
+                    release_db_connection(conn)
 
             u_upd = get_user(user_id)
             markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
@@ -1648,7 +1685,8 @@ def create_topup_order(message_obj, user_id, amount_inr):
                             except Exception:
                                 pass
                             up = get_user(uid)
-                            bot.send_message(chat_id, f"🎉 **Payment of ₹{amt} credited!** Current Balance: ₹{up['balance']:.2f}")
+                            cur_b = up['balance'] if up else amt
+                            bot.send_message(chat_id, f"🎉 **Payment of ₹{amt} credited!** Current Balance: ₹{cur_b:.2f}")
                             break
                     except Exception:
                         pass
@@ -1677,13 +1715,14 @@ def handle_ticket_input(message):
     msg = message.text.strip()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute('INSERT INTO support_tickets (user_id, category, message, status, date) VALUES (%s, %s, %s, %s, %s)', (uid, cat, msg, 'Open', now_str))
-        conn.commit()
-        cur.close()
-    finally:
-        release_db_connection(conn)
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute('INSERT INTO support_tickets (user_id, category, message, status, date) VALUES (%s, %s, %s, %s, %s)', (uid, cat, msg, 'Open', now_str))
+            conn.commit()
+            cur.close()
+        finally:
+            release_db_connection(conn)
 
     bot.send_message(message.chat.id, "✅ Ticket submitted. We will inspect it shortly.")
     try:
@@ -1697,6 +1736,9 @@ def handle_coupon_input(message):
     waiting_for_coupon_code.pop(uid, None)
     code = message.text.strip().upper()
     conn = get_db_connection()
+    if not conn:
+        bot.send_message(message.chat.id, "Database temporarily unavailable.")
+        return
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cur.execute('SELECT * FROM coupons WHERE code = %s', (code,))
@@ -1938,6 +1980,7 @@ def handle_ai_image_prompt(message):
         if resp.status_code == 200:
             log_bot_transaction(uid, "AI_IMAGE", IMAGE_FEE, f"Generated: {prompt[:40]}")
             u_upd = get_user(uid)
+            rem_bal = u_upd['balance'] if u_upd else 0.0
             markup = telebot.types.InlineKeyboardMarkup().add(
                 telebot.types.InlineKeyboardButton("🎨 Create Another (₹2)", callback_data="open_image_gen"),
                 telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
@@ -1945,7 +1988,7 @@ def handle_ai_image_prompt(message):
             bot.send_photo(
                 message.chat.id,
                 resp.content,
-                caption=f"✨ **Prompt:** `{prompt[:150]}`\n💰 Charged: ₹{IMAGE_FEE:.2f} | 💳 Balance: ₹{u_upd['balance']:.2f}",
+                caption=f"✨ **Prompt:** `{prompt[:150]}`\n💰 Charged: ₹{IMAGE_FEE:.2f} | 💳 Balance: ₹{rem_bal:.2f}",
                 parse_mode="Markdown",
                 reply_markup=markup
             )
@@ -2007,6 +2050,7 @@ def handle_rembg_photo(message):
 
         log_bot_transaction(uid, "BG_REMOVE", REMBG_FEE, "Background removal cutout")
         u_upd = get_user(uid)
+        rem_bal = u_upd['balance'] if u_upd else 0.0
 
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("✂️ Cutout Another (₹1)", callback_data="open_rembg"),
@@ -2015,7 +2059,7 @@ def handle_rembg_photo(message):
         bot.send_document(
             message.chat.id,
             output_stream,
-            caption=f"✅ **Background Removed Successfully!**\n💰 Charged: ₹{REMBG_FEE:.2f} | 💳 Balance: ₹{u_upd['balance']:.2f}",
+            caption=f"✅ **Background Removed Successfully!**\n💰 Charged: ₹{REMBG_FEE:.2f} | 💳 Balance: ₹{rem_bal:.2f}",
             parse_mode="Markdown",
             reply_markup=markup
         )
@@ -2076,6 +2120,7 @@ def handle_enhance_photo(message):
 
         log_bot_transaction(uid, "IMAGE_ENHANCE", ENHANCE_FEE, "Image quality enhancement")
         u_upd = get_user(uid)
+        rem_bal = u_upd['balance'] if u_upd else 0.0
         markup = telebot.types.InlineKeyboardMarkup().add(
             telebot.types.InlineKeyboardButton("✨ Enhance Another (₹1)", callback_data="open_enhance"),
             telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
@@ -2083,7 +2128,7 @@ def handle_enhance_photo(message):
         bot.send_photo(
             message.chat.id,
             output_stream,
-            caption=f"✨ **Image Enhanced Successfully!**\n💰 Cost: ₹{ENHANCE_FEE:.2f} | 💳 Balance: ₹{u_upd['balance']:.2f}",
+            caption=f"✨ **Image Enhanced Successfully!**\n💰 Cost: ₹{ENHANCE_FEE:.2f} | 💳 Balance: ₹{rem_bal:.2f}",
             parse_mode="Markdown",
             reply_markup=markup
         )
@@ -2138,17 +2183,18 @@ def admin_coupon_builder(message):
             expires_at = (datetime.now() + timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
 
             conn = get_db_connection()
-            try:
-                cur = conn.cursor()
-                cur.execute('''
-                    INSERT INTO coupons (code, reward_type, value, max_uses, uses_count, per_user_limit, expires_at)
-                    VALUES (%s, %s, %s, %s, 0, 1, %s)
-                    ON CONFLICT (code) DO UPDATE SET reward_type = EXCLUDED.reward_type, value = EXCLUDED.value, max_uses = EXCLUDED.max_uses, expires_at = EXCLUDED.expires_at
-                ''', (code, r_type, val, max_uses, expires_at))
-                conn.commit()
-                cur.close()
-            finally:
-                release_db_connection(conn)
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute('''
+                        INSERT INTO coupons (code, reward_type, value, max_uses, uses_count, per_user_limit, expires_at)
+                        VALUES (%s, %s, %s, %s, 0, 1, %s)
+                        ON CONFLICT (code) DO UPDATE SET reward_type = EXCLUDED.reward_type, value = EXCLUDED.value, max_uses = EXCLUDED.max_uses, expires_at = EXCLUDED.expires_at
+                    ''', (code, r_type, val, max_uses, expires_at))
+                    conn.commit()
+                    cur.close()
+                finally:
+                    release_db_connection(conn)
 
             bot.send_message(message.chat.id, f"✅ **Coupon `{code}` Created!**\nReward: {r_type} ({val})\nUses: {max_uses}\nExpires: {expires_at}", parse_mode="Markdown")
         except Exception as e:
@@ -2163,15 +2209,17 @@ def handle_admin_action(message):
 
     if action == "broadcast":
         conn = get_db_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute('SELECT user_id FROM users')
-            users = cur.fetchall()
-            cur.close()
-        except Exception:
-            users = []
-        finally:
-            release_db_connection(conn)
+        users = []
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute('SELECT user_id FROM users')
+                users = cur.fetchall()
+                cur.close()
+            except Exception:
+                users = []
+            finally:
+                release_db_connection(conn)
         sent, fail = 0, 0
         for u in users:
             try:
@@ -2215,13 +2263,14 @@ def handle_admin_action(message):
             if target:
                 new_ban = 0 if target["banned"] else 1
                 conn = get_db_connection()
-                try:
-                    cur = conn.cursor()
-                    cur.execute('UPDATE users SET banned = %s WHERE user_id = %s', (new_ban, target_id))
-                    conn.commit()
-                    cur.close()
-                finally:
-                    release_db_connection(conn)
+                if conn:
+                    try:
+                        cur = conn.cursor()
+                        cur.execute('UPDATE users SET banned = %s WHERE user_id = %s', (new_ban, target_id))
+                        conn.commit()
+                        cur.close()
+                    finally:
+                        release_db_connection(conn)
                 status = "Banned" if new_ban == 1 else "Unbanned"
                 bot.send_message(message.chat.id, f"✅ User `{target_id}` is now **{status}**.", parse_mode="Markdown")
             else:
@@ -2236,25 +2285,33 @@ def handle_admin_action(message):
             if target:
                 new_role = "Customer" if target["role"] == "Reseller" else "Reseller"
                 conn = get_db_connection()
-                try:
-                    cur = conn.cursor()
-                    cur.execute('UPDATE users SET role = %s WHERE user_id = %s', (new_role, target_id))
-                    conn.commit()
-                    cur.close()
-                finally:
-                    release_db_connection(conn)
+                if conn:
+                    try:
+                        cur = conn.cursor()
+                        cur.execute('UPDATE users SET role = %s WHERE user_id = %s', (new_role, target_id))
+                        conn.commit()
+                        cur.close()
+                    finally:
+                        release_db_connection(conn)
                 bot.send_message(message.chat.id, f"✅ User `{target_id}` role set to **{new_role}**.", parse_mode="Markdown")
             else:
                 bot.send_message(message.chat.id, "❌ User not found.")
         except Exception:
             bot.send_message(message.chat.id, "❌ Invalid user ID.")
 
-# --- SAFE STARTUP: DELETE OLD WEBHOOK BEFORE POLLING ---
-try:
-    bot.delete_webhook(drop_pending_updates=True)
-    print("Old webhook deleted. Ready for polling.")
-except Exception as e:
-    print(f"Webhook clear warning: {e}")
+# --- SAFE STARTUP SEQUENCE ---
+if __name__ == "__main__":
+    print("Initiating safe Telegram connection...")
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+        print("Webhook cleared successfully.")
+    except Exception as e:
+        print(f"Webhook clearance notice: {e}")
 
-print("Bot is up and running.")
-bot.infinity_polling(skip_pending=True)
+    print("Bot is up and running.")
+    while True:
+        try:
+            bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
+        except Exception as err:
+            print(f"Polling encountered an error, restarting in 3 seconds: {err}")
+            time.sleep(3)
