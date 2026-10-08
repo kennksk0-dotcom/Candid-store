@@ -8,85 +8,48 @@ from datetime import datetime, timedelta
 import threading
 import time
 import random
-import string
-import urllib.parse
-import io
-import tempfile
-from PIL import Image, ImageEnhance, ImageFilter
+import uuid
 
-try:
-    from rembg import remove
-    REMBG_ENABLED = True
-except Exception as e:
-    remove = None
-    REMBG_ENABLED = False
-    print(f"Warning: rembg engine not loaded: {e}")
-
-try:
-    import yt_dlp
-    YTDLP_ENABLED = True
-except Exception as e:
-    yt_dlp = None
-    YTDLP_ENABLED = False
-    print(f"Warning: yt-dlp not loaded: {e}")
-
-# --- CONFIGURATION ---
+# ==============================================================================
+# CONFIGURATION & ENVIRONMENT VARIABLES
+# ==============================================================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or "8980753842:AAG05SklWh3TshUWiJio1_MTWo2Net-ijiE"
 ADMIN_ID = int(os.environ.get("ADMIN_ID") or 7997110885)
 
+# Supabase PostgreSQL Pool URL
+SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
+
+# FamPay UPI Gateway
 FAMPAY_API_KEY = os.environ.get("FAMPAY_API_KEY") or "FAM_LIVE_sk_hRGdY9XAmPu7wzRg9HXjwa8pHdPhKNGB"
 FAMPAY_BASE_URL = "https://py.freepanel.in/api/v1"
 
-# BANTIBHAIYA RESELLER CONFIG (.TO DOMAIN)
-BANTI_API_URL = os.environ.get("BANTI_API_URL") or "https://bantibhaiya.to/api/reseller_v1.php"
-BANTI_API_KEY = os.environ.get("BANTI_API_KEY") or "8dc220a22ee3ea0ba80340978c2f1248"
-BANTI_MASTER_KEY = os.environ.get("BANTI_MASTER_KEY") or "a7f3e8b2c9d1f4a6b8c2d5e9f1a3b6c8"
+# Cuppon'sHub Reseller API Config
+CUPPON_BASE_URL = "https://cupponhub.shop/reseller/api/"
+CUPPON_API_KEY = os.environ.get("CUPPON_API_KEY") or "ch_live_K4i-1AIpG9u-tGzIHhl8uUlIQx7aL9UGdqfqzrkJs0"
 
-# AAPKA PROVIDER SMM CONFIG
-AAPKA_API_URL = "https://aapkaprovider.com/api/v2"
-AAPKA_API_KEY = os.environ.get("AAPKA_API_KEY") or "64e5f851a708586e575c1e76719bd653"
+# Currency Conversion & Markup (Wholesale USDT -> Selling INR)
+USDT_TO_INR_RATE = float(os.environ.get("USDT_TO_INR_RATE", "92.0"))  # Base USDT to INR conversion
+PROFIT_MARGIN = float(os.environ.get("PROFIT_MARGIN", "1.25"))        # 25% profit margin multiplier
 
-# SMM SERVICE RATES & PROVIDER LIMITS
-SMM_SERVICES = {
-    "14686": {"name": "Instagram Reel Views", "rate": 1.0, "min": 100, "max": 1000000, "link_type": "Instagram Reel/Post link"},
-    "14811": {"name": "Telegram Channel Members", "rate": 35.0, "min": 500, "max": 100000, "link_type": "Public Telegram Channel/Group link (https://t.me/...)"},
-    "14166": {"name": "Instagram Indian Likes", "rate": 20.0, "min": 50, "max": 50000, "link_type": "Instagram Post/Reel link"},
-    "9895": {"name": "Instagram Indian Followers", "rate": 120.0, "min": 50, "max": 50000, "link_type": "Instagram Profile link"}
+# Optional fallback fixed INR pricing for specific products (Product Key: Price in ₹)
+FIXED_INR_PRICING = {
+    "gemini_link": 49.0,
 }
-
-# POLLINATIONS AI & MEDIA CONFIG
-POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY") or "sk_T1yQaq7ay5S6l1QdjepQtMh0ak8F1SJi"
-IMAGE_FEE = 2.0
-REMBG_FEE = 1.0
-ENHANCE_FEE = 1.0
-
-# AI & DB CONFIG
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-SUPABASE_DB_URL = os.environ.get("DATABASE_URL")
-
-AI_INSTRUCTION = (
-    "You are CandidStore AI, helpful customer assistant for CandidStore.\n"
-    "We provide Game Mod Keys (Free Fire, CODM, MLBB, 8 Ball Pool, Carrom Pool, Snake Soccer), "
-    "iOS Gbox Certificates, SMM Social Media Boosting (IG Views @ ₹1/1k, TG Members @ ₹35/1k, Likes, Followers), "
-    "Free Video Downloader (Insta Reels & YouTube Shorts), AI Image Generation @ ₹2, AI Background Remover @ ₹1, "
-    "AI Image Enhancer @ ₹1, and 100% Free Disposable Temp Mail.\n"
-    "Guide users naturally, explain Root vs Non-Root vs iOS cleanly, and assist them continuously."
-)
 
 STORE_UNDER_MAINTENANCE = False
 
-# HIGH-CONCURRENCY BOT INITIALIZATION
+# ==============================================================================
+# BOT & DATABASE POOL INITIALIZATION
+# ==============================================================================
 bot = telebot.TeleBot(BOT_TOKEN, num_threads=20, threaded=True)
 
-# SAFE DATABASE CONNECTION POOL INITIALIZATION
 db_pool = None
 if SUPABASE_DB_URL:
     try:
         db_pool = pool.ThreadedConnectionPool(2, 25, SUPABASE_DB_URL, sslmode='require', connect_timeout=10)
-        print("Database connection pool successfully initialized.")
+        print("Supabase connection pool successfully initialized.")
     except Exception as e:
-        print(f"Database pool initialization error: {e}")
+        print(f"Supabase pool initialization error: {e}")
 else:
     print("Warning: DATABASE_URL environment variable is missing!")
 
@@ -105,22 +68,15 @@ def release_db_connection(conn, close=False):
         except Exception:
             pass
 
+# In-Memory State Trackers
 admin_actions = {}
 admin_coupon_flow = {}
 user_orders = {}
 waiting_for_custom_topup = {}
 waiting_for_support_ticket = {}
 waiting_for_coupon_code = {}
-waiting_for_ai_prompt = {}
-waiting_for_image_prompt = {}
-waiting_for_rembg_photo = {}
-waiting_for_enhance_photo = {}
-waiting_for_dl_link = {}
-user_temp_mails = {}
-waiting_for_smm_link = {}
-waiting_for_smm_qty = {}
 
-# --- HELPER: SAFE EDIT TO AVOID 'MESSAGE NOT MODIFIED' CRASHES ---
+# Safe edit message helper to avoid Telegram 'message not modified' exceptions
 def safe_edit_message_text(text, chat_id, message_id, **kwargs):
     try:
         return bot.edit_message_text(text, chat_id, message_id, **kwargs)
@@ -129,174 +85,9 @@ def safe_edit_message_text(text, chat_id, message_id, **kwargs):
             return None
         raise e
 
-# --- MODS CATALOG ---
-CATALOG = {
-    # 1. Free Fire Non-Root
-    "ff_nr_abcd": {
-        "name": "ABCD PANEL FF NONROOT", "pid": "151",
-        "items": [("12 Hours", 49.0), ("1 DaYs", 99.0), ("3 DaYs", 199.0), ("7 DaYs", 350.0)]
-    },
-    "ff_nr_bala": {
-        "name": "XYZ CHEATS BALA FF NONROOT", "pid": "155",
-        "items": [("1 Hours", 15.0), ("2 Hours", 23.0), ("4 Hours", 30.0), ("6 Hours", 40.0), ("12 Hours", 55.0), ("24 Hours", 100.0)]
-    },
-    "ff_nr_silent_apk": {
-        "name": "XYZ CHEATS APK SILENT FF NONROOT", "pid": "153",
-        "items": [("1 Hours", 15.0), ("3 Hours", 35.0), ("6 Hours", 60.0), ("12 Hours", 130.0), ("24 Hours", 180.0)]
-    },
-    "ff_nr_cfg_proxy": {
-        "name": "XYZ CHEATS CONFIG PROXY FF NONROOT", "pid": "142",
-        "items": [("1 Hours", 15.0), ("3 Hours", 35.0), ("6 Hours", 60.0), ("12 Hours", 130.0), ("24 Hours", 180.0)]
-    },
-    "ff_nr_sc_proxy": {
-        "name": "SILENT CHEAT FF NONROOT PROXY", "pid": "148",
-        "items": [
-            ("1 Hours Apk Silent", 15.0), ("3 Hours Apk Silent", 30.0), ("6 Hours Apk Silent", 50.0), ("12 Hours Apk Silent", 90.0), ("1 DaYs Apk Silent", 170.0),
-            ("1 Hours Config Proxy", 15.0), ("3 Hours Config Proxy", 30.0), ("6 Hours Config Proxy", 50.0), ("12 Hours Config Proxy", 90.0), ("1 DaYs Config Proxy", 170.0)
-        ]
-    },
-    "ff_nr_sc_apkmod": {
-        "name": "SILENT CHEAT FF NONROOT APKMOD", "pid": "127",
-        "items": [("1 DaYs", 90.0), ("3 DaYs", 180.0), ("7 DaYs", 350.0), ("14 DaYs", 600.0), ("28 DaYs", 900.0)]
-    },
-    "ff_nr_prime": {
-        "name": "PRIME HOOK FF NONROOT ANDROID", "pid": "48",
-        "items": [("1 Days Nonroot", 70.0), ("3 Days Nonroot", 120.0), ("7 Days NonRoot", 290.0), ("10 Days Nonroot", 320.0)]
-    },
-    "ff_nr_drip_wire": {
-        "name": "DRIPCLIENT WIRE FF NONROOT ANDROID+IPHONE", "pid": "150",
-        "items": [("6 Hours", 35.0), ("12 Hours", 55.0), ("1 DaYs", 90.0), ("7 DaYs", 350.0)]
-    },
-    "ff_nr_drip_proxy": {
-        "name": "DRIPCLIENT PROXY FF NONROOT ANDROID", "pid": "91",
-        "items": [("1 DaYs", 60.0), ("3 DaYs", 140.0), ("7 DaYs", 250.0), ("30 DaYs", 600.0)]
-    },
-    "ff_nr_hg_proxy": {
-        "name": "HG CHEATS ANDROID PROXY FF NONROOT", "pid": "123",
-        "items": [("1 DaYs", 70.0), ("7 DaYs", 270.0), ("10 DaYs", 300.0), ("30 DaYs", 500.0)]
-    },
-    "ff_nr_hg_prime": {
-        "name": "HG CHEATS PRIME PROXY FF NONROOT", "pid": "141",
-        "items": [("1 DaYs", 70.0), ("7 DaYs", 250.0), ("10 DaYs", 300.0)]
-    },
-    "ff_nr_xrag": {
-        "name": "XRAG FF ROOT+NONROOT+IOS IPHONE+PC", "pid": "149",
-        "items": [("1 Hours", 15.0), ("3 Hours", 30.0), ("6 Hours", 40.0), ("12 Hours", 55.0), ("24 Hours", 70.0), ("3 DaYs", 150.0), ("7 DaYs", 200.0)]
-    },
-    "ff_nr_aimhack": {
-        "name": "AIM HACK FF ROOT+NONROOT+IOS IPHONE+PC", "pid": "133",
-        "items": [("1 Hours", 15.0), ("3 Hours", 30.0), ("6 Hours", 40.0), ("12 Hours", 55.0), ("1 DaYs", 70.0), ("3 DaYs", 150.0), ("7 DaYs", 200.0)]
-    },
-    "ff_nr_pato": {
-        "name": "PATO TEAM FF ALL ANDROID", "pid": "54",
-        "items": [("3 DaYs All Colours Mix", 150.0), ("7 DaYs All Colours Mix", 300.0), ("15 DaYs All Colours Mix", 500.0), ("30 DaYs All Colours Mix", 700.0)]
-    },
-    # 2. Free Fire Root
-    "ff_r_silent": {
-        "name": "SILENT CHEAT FF ROOT ANDROID", "pid": "128",
-        "items": [
-            ("1 DaYs SAFE", 90.0), ("3 DaYs SAFE", 180.0), ("7 DaYs SAFE", 350.0), ("14 DaYs SAFE", 600.0), ("28 DaYs SAFE", 900.0),
-            ("1 DaYs BRUTAL", 90.0), ("3 DaYs BRUTAL", 180.0), ("7 DaYs BRUTAL", 350.0), ("14 DaYs BRUTAL", 600.0), ("28 DaYs BRUTAL", 900.0)
-        ]
-    },
-    "ff_r_haxx": {
-        "name": "HAXX-CKER PRO FF ANDROID", "pid": "64",
-        "items": [("3 DaYs", 180.0), ("5 DaYs", 280.0), ("10 DaYs", 550.0), ("20 DaYs", 1050.0), ("30 DaYs", 1450.0), ("60 DaYs", 2800.0)]
-    },
-    "ff_r_rapid": {
-        "name": "RAPID CORE FF ROOT ANDROID", "pid": "152",
-        "items": [("1 DaYs", 80.0), ("7 DaYs", 300.0), ("14 DaYs", 500.0), ("30 DaYs", 699.0)]
-    },
-    "ff_r_drip": {
-        "name": "DRIPCLIENT FF ROOT ANDROID", "pid": "63",
-        "items": [("1 DaYS ROOT", 60.0), ("7 DaYS ROOT", 250.0), ("30 DaYS ROOT", 600.0)]
-    },
-    "ff_r_hg": {
-        "name": "HG CHEATS FF APKMOD NONROOT+ROOT", "pid": "65",
-        "items": [("1 DaYs Root + Nonroot", 70.0), ("7 DaYs Root+Nonroot", 270.0), ("10 DaYs Root+Nonroot", 300.0), ("30 DaYs Root+Nonroot", 500.0)]
-    },
-    # 3. Free Fire iOS
-    "ff_ios_migul": {
-        "name": "MIGUL IPHONE IOS FF", "pid": "69",
-        "items": [
-            ("1 DaYs Basic", 250.0), ("7 DaYs Basic", 600.0), ("30 DaYs Basic", 1200.0),
-            ("1 DaYs PRO", 250.0), ("7 DaYs PRO", 600.0), ("30 DaYs PRO", 1200.0)
-        ]
-    },
-    "ff_ios_delta": {
-        "name": "DELTA PROXY IOS IPHONE", "pid": "140",
-        "items": [("1 DaYs", 150.0), ("7 DaYs", 350.0), ("30 DaYs", 700.0)]
-    },
-    # 4. Free Fire PC
-    "ff_pc_brmod": {
-        "name": "BR MOD FF PC VERSION", "pid": "49",
-        "items": [
-            ("1 Day Pc Aim Silent", 79.0), ("10 Days Pc Aim Silent", 479.0), ("30 Days Pc Aim Silent", 799.0),
-            ("10 Days Pc Bypass + Silent", 519.0),
-            ("1 Day Pc Modmenu x86", 79.0), ("10 Day Pc Modmenu x86", 479.0), ("30 Day Pc Modmenu x86", 799.0)
-        ]
-    },
-    # 5. CODM
-    "codm_ios_cloud": {
-        "name": "IOS CLOUD CODM", "pid": "87",
-        "items": [("30 DaYs", 2000.0)]
-    },
-    # 6. MLBB
-    "mlbb_ios_fluorite": {
-        "name": "FLUORITE IOS MLBB", "pid": "84",
-        "items": [("1 DaYs", 400.0), ("7 DaYs", 1000.0), ("30 DaYs", 2000.0)]
-    },
-    # 7. 8 Ball Pool
-    "8bp_snake_nr": {
-        "name": "SNAKE 8 BALL POOL NONROOT ANDROID", "pid": "79",
-        "items": [("3 DaYs", 230.0), ("10 DaYs", 570.0), ("30 DaYs", 1200.0)]
-    },
-    "8bp_kos_virtual": {
-        "name": "KOS 8 BALL POOL VIRTUAL", "pid": "76",
-        "items": [("1 DaYs", 150.0), ("7 DaYs", 450.0), ("15 DaYs", 800.0), ("30 DaYs", 1500.0)]
-    },
-    "8bp_kos_root": {
-        "name": "KOS 8 BALL POOL MOD+ROOT", "pid": "138",
-        "items": [("1 DaYs", 150.0), ("7 DaYs", 450.0), ("15 DaYs", 900.0), ("30 DaYs", 1500.0)]
-    },
-    "8bp_ios_fluorite": {
-        "name": "IOS FLUORITE 8 BALL POOL", "pid": "86",
-        "items": [("1 DaYs", 400.0), ("30 DaYs", 2000.0)]
-    },
-    # 8. Carrom Pool
-    "carrom_snake_nr": {
-        "name": "SNAKE CARROM POOL NONROOT ANDROID", "pid": "77",
-        "items": [("3 DaYs", 200.0), ("10 DaYs", 430.0), ("30 DaYs", 970.0)]
-    },
-    "carrom_kos_nr": {
-        "name": "KOS CARROM POOL NONROOT ANDROID", "pid": "75",
-        "items": [("1 DaYs", 150.0), ("7 DaYs", 450.0), ("15 DaYs", 900.0), ("30 DaYs", 1500.0)]
-    },
-    # 9. Snake Soccer Stars
-    "soccer_snake_nr": {
-        "name": "SNAKE SOCCER STARS NONROOT ANDROID", "pid": "78",
-        "items": [("3 DaYs", 160.0), ("10 DaYs", 350.0), ("30 DaYs", 650.0)]
-    },
-    # 10. iOS Certificates
-    "ios_certs": {
-        "name": "IOS IPHONE ALL GBOX CERTIFICATE", "pid": "85",
-        "items": [("1 Year Ios Esign Gbox Certificate", 320.0), ("1 Year Ios Signer Gbox Certificate", 800.0)]
-    }
-}
-
-MAINTENANCE_PRODUCTS = [
-    "BALA MOD XYZ ~ V4 FF NONROOT (PID 136)",
-    "DRIPCLIENT FF NONROOT APKMOD (PID 62)",
-    "FLUORITE IOS FF (PID 58)",
-    "DRIPCLIENT 8BP NONROOT ANDROID (PID 59)",
-    "DRIPCLIENT FF PC AIMKILL (PID 44)",
-    "NINE X FF NONROOT (PID 144)",
-    "KOS FF ROOT ANDROID (PID 74)",
-    "BR MOD FF ROOT ANDROID (PID 67)",
-    "XYZ CHEATS FF ROOT ANDROID (PID 66)",
-    "REAPER X PRO FF ROOT ANDROID (PID 81)"
-]
-
+# ==============================================================================
+# DATABASE SCHEMA SETUP
+# ==============================================================================
 def init_db():
     conn = get_db_connection()
     if not conn:
@@ -328,9 +119,10 @@ def init_db():
             CREATE TABLE IF NOT EXISTS orders (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT,
-                duration TEXT,
-                license_key TEXT,
+                product_name TEXT,
+                delivered_item TEXT,
                 price REAL,
+                reseller_order_id TEXT,
                 date TEXT
             )
         ''')
@@ -375,7 +167,7 @@ def init_db():
         ''')
         conn.commit()
         cur.close()
-        print("Database schema successfully verified.")
+        print("Supabase schema verified successfully.")
     except Exception as e:
         print(f"DB Init Error: {e}")
     finally:
@@ -383,6 +175,9 @@ def init_db():
 
 init_db()
 
+# ==============================================================================
+# DATABASE TRANSACTION HELPERS
+# ==============================================================================
 def log_bot_transaction(user_id, tx_type, amount, details):
     conn = get_db_connection()
     if not conn:
@@ -475,121 +270,69 @@ def atomic_update_balance(user_id, amount_change, spend_add=0, order_add=0):
     finally:
         release_db_connection(conn)
 
-# --- INSTAGRAM STREAM EXTRACTOR ---
-def fetch_instagram_direct_mp4(url):
-    clean_url = url.split("?")[0].strip()
-    cobalt_nodes = [
-        "https://api.cobalt.tools",
-        "https://cobalt-api.kwiatekm.tokyo",
-        "https://api.wuk.sh"
-    ]
+# ==============================================================================
+# CUPPON'SHUB RESELLER API CLIENT
+# ==============================================================================
+def cuppon_headers(idempotency_key=None):
     headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "X-API-Key": CUPPON_API_KEY,
+        "User-Agent": "CandidStore-TelegramBot/2.0"
     }
-    payload = {
-        "url": clean_url,
-        "videoQuality": "720",
-        "filenameStyle": "basic"
-    }
-    for node in cobalt_nodes:
-        try:
-            r = requests.post(f"{node}/api/json", json=payload, headers=headers, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                if "url" in data:
-                    return data["url"]
-                if "picker" in data and len(data["picker"]) > 0:
-                    return data["picker"][0].get("url")
-        except Exception:
-            continue
-            
-    gateways = [
-        f"https://api.vkrdown.com/insta/?url={clean_url}",
-        f"https://snapinsta.app/api/ajaxSearch?q={clean_url}&t=media"
-    ]
-    snap_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://snapinsta.app/"
-    }
-    for gw in gateways:
-        try:
-            if "snapinsta" in gw:
-                r2 = requests.post(gw, data={"q": clean_url, "t": "media"}, headers=snap_headers, timeout=10)
-            else:
-                r2 = requests.get(gw, headers=snap_headers, timeout=10)
-                
-            if r2.status_code == 200:
-                d2 = r2.json()
-                d_url = d2.get("downloadUrl") or d2.get("url") or d2.get("data")
-                if isinstance(d_url, list) and len(d_url) > 0:
-                    return d_url[0]
-                if isinstance(d_url, str) and d_url.startswith("http"):
-                    return d_url
-                if "data" in d2 and isinstance(d2["data"], dict):
-                    nested = d2["data"].get("downloadUrl") or d2["data"].get("url")
-                    if nested:
-                        return nested
-        except Exception:
-            continue
-    return None
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+        headers["Content-Type"] = "application/json"
+    return headers
 
-# --- MAIL.TM ENGINE ---
-def mailtm_get_domain():
+def cuppon_get_balance():
     try:
-        r = requests.get("https://api.mail.tm/domains", timeout=10)
-        domains = r.json().get("hydra:member", [])
-        if domains:
-            return domains[0]["domain"]
-    except Exception:
-        pass
-    return None
-
-def mailtm_create_account():
-    domain = mailtm_get_domain()
-    if not domain:
-        return None, None
-    rand_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    address = f"{rand_id}@{domain}"
-    password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    try:
-        requests.post("https://api.mail.tm/accounts", json={"address": address, "password": password}, timeout=10)
-        tok_res = requests.post("https://api.mail.tm/token", json={"address": address, "password": password}, timeout=10)
-        return address, tok_res.json().get("token")
-    except Exception:
-        return None, None
-
-def mailtm_fetch_messages(token):
-    try:
-        r = requests.get("https://api.mail.tm/messages", headers={"Authorization": f"Bearer {token}"}, timeout=10)
-        return r.json().get("hydra:member", [])
-    except Exception:
-        return []
-
-def mailtm_fetch_message_detail(token, msg_id):
-    try:
-        r = requests.get(f"https://api.mail.tm/messages/{msg_id}", headers={"Authorization": f"Bearer {token}"}, timeout=10)
-        return r.json()
-    except Exception:
-        return None
-
-# --- SMM API CALL ---
-def smm_place_order(service_id, link, quantity):
-    try:
-        payload = {
-            "key": AAPKA_API_KEY,
-            "action": "add",
-            "service": str(service_id),
-            "link": link.strip(),
-            "quantity": int(quantity)
-        }
-        res = requests.post(AAPKA_API_URL, data=payload, timeout=15)
-        return res.json()
+        r = requests.get(f"{CUPPON_BASE_URL}?action=balance", headers=cuppon_headers(), timeout=10)
+        data = r.json()
+        if data.get("ok"):
+            return float(data.get("balance_usdt", 0.0))
     except Exception as e:
-        return {"error": str(e)}
+        print(f"Cuppon balance fetch error: {e}")
+    return None
 
-# --- START COMMAND ---
+def cuppon_get_products():
+    try:
+        r = requests.get(f"{CUPPON_BASE_URL}?action=products", headers=cuppon_headers(), timeout=10)
+        data = r.json()
+        if data.get("ok"):
+            return data.get("products", [])
+    except Exception as e:
+        print(f"Cuppon products fetch error: {e}")
+    return []
+
+def cuppon_purchase_product(product_key, quantity=1):
+    idempotency = f"tg-order-{uuid.uuid4().hex[:14]}"
+    payload = {
+        "product": product_key,
+        "quantity": int(quantity)
+    }
+    try:
+        r = requests.post(
+            f"{CUPPON_BASE_URL}?action=purchase",
+            headers=cuppon_headers(idempotency_key=idempotency),
+            json=payload,
+            timeout=25
+        )
+        return r.json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def calculate_inr_price(product_key, wholesale_usdt_str):
+    if product_key in FIXED_INR_PRICING:
+        return FIXED_INR_PRICING[product_key]
+    try:
+        usdt_val = float(wholesale_usdt_str)
+        price_inr = round(usdt_val * USDT_TO_INR_RATE * PROFIT_MARGIN, 0)
+        return max(price_inr, 10.0)
+    except Exception:
+        return 49.0
+
+# ==============================================================================
+# BOT COMMAND HANDLERS
+# ==============================================================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -598,6 +341,7 @@ def send_welcome(message):
         bot.send_message(message.chat.id, "❌ **Access Denied:** Your account has been suspended.", parse_mode="Markdown")
         return
 
+    # Handle Referral System
     args = message.text.split()
     if len(args) > 1 and args[1].startswith("ref_"):
         try:
@@ -607,7 +351,7 @@ def send_welcome(message):
                 if conn:
                     try:
                         cur = conn.cursor()
-                        cur.execute('UPDATE users SET total_referrals = total_referrals + 1 WHERE user_id = %s', (referrer_id,))
+                        cur.execute('UPDATE users SET total_referrals = total_referrals + 1, bonus_spins = bonus_spins + 1 WHERE user_id = %s', (referrer_id,))
                         conn.commit()
                         cur.close()
                     finally:
@@ -615,27 +359,11 @@ def send_welcome(message):
         except Exception:
             pass
 
-    if not user or not user.get("verified", False):
-        if not user:
-            save_user_profile(user_id, message.from_user.first_name, None, verified=False)
-        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        markup.add(telebot.types.KeyboardButton("🛡️ Share Contact for Verification", request_contact=True))
-        bot.send_message(message.chat.id, "🔐 **IDENTITY CHECK NEEDED**\n\nPlease verify your contact before continuing:", parse_mode="Markdown", reply_markup=markup)
-        return
+    # First time registration check
+    if not user:
+        save_user_profile(user_id, message.from_user.first_name, None, verified=True)
 
     show_main_menu(message.chat.id, user_id)
-
-@bot.message_handler(content_types=['contact'])
-def handle_contact(message):
-    user_id = message.from_user.id
-    if message.contact:
-        user = get_user(user_id)
-        if user and user["banned"]:
-            bot.send_message(message.chat.id, "❌ Your account is suspended.", parse_mode="Markdown")
-            return
-        save_user_profile(user_id, message.from_user.first_name, message.contact.phone_number, verified=True)
-        bot.send_message(message.chat.id, "✅ Verification Successful!", reply_markup=telebot.types.ReplyKeyboardRemove(), parse_mode="Markdown")
-        show_main_menu(message.chat.id, user_id)
 
 def show_main_menu(chat_id, user_id):
     user = get_user(user_id)
@@ -644,65 +372,47 @@ def show_main_menu(chat_id, user_id):
 
     is_admin = (user_id == ADMIN_ID)
     user_role = user.get("role", "Customer") if user else "Customer"
+    user_bal = user["balance"] if user else 0.0
 
     welcome_text = (
-        "🟢 **STORE & UTILITIES HUB ONLINE** 🟢\n\n"
-        "✨ **Available Services & Perks**\n"
-        "💎 Instant Delivery of Verified Game Keys\n"
-        "🚀 Social Media Booster (IG Views @ ₹1/1k, TG Members @ ₹35/1k)\n"
-        "📥 Free Video Downloader (Insta Reels & YouTube Shorts)\n"
-        "🎨 AI Image Generator (Flux 4K @ ₹2)\n"
-        "✂️ AI Background Remover (Cutout @ ₹1)\n"
-        "✨ AI Image Enhancer & Upscaler (4K @ ₹1)\n"
-        "📬 100% Free Disposable Temp Mail Service\n"
-        "🤖 Dual-Core Smart AI Assistant (24/7 Support)\n"
-        "🎟️ Support Tickets & Lucky Spin System\n\n"
-        "🛒 **Select an option below:**"
+        "⚡ **AI SUBSCRIPTION ACTIVATION STORE** ⚡\n\n"
+        "Get instant, genuine activation links for premium AI platforms (Google Gemini Advanced, ChatGPT Plus, Claude & more).\n\n"
+        f"💳 **Your Wallet:** `₹{user_bal:.2f}`\n"
+        f"👤 **Account Tier:** `{user_role}`\n\n"
+        "✨ **Perks:**\n"
+        "• ⚡ Instant delivery direct to chat\n"
+        "• 🛡️ 100% replacement warranty on unactivated links\n"
+        "• 💸 Instant UPI top-ups via QR\n\n"
+        "👇 **Choose an option below to get started:**"
     )
-    if is_admin or user_role == "Reseller":
-        welcome_text += f"\n\n⚙️ [{user_role} Dashboard Unlocked]"
 
     markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("🎮 ALL GAME KEYS CATALOG", callback_data="mods_game_select"))
+    markup.add(telebot.types.InlineKeyboardButton("🚀 BROWSE AI ACTIVATION LINKS", callback_data="ai_catalog"))
     markup.add(
-        telebot.types.InlineKeyboardButton("📥 Download Videos (Free)", callback_data="open_downloader"),
-        telebot.types.InlineKeyboardButton("🚀 Boost Socials", callback_data="smm_main_menu")
-    )
-    markup.add(
-        telebot.types.InlineKeyboardButton("🎨 AI Image Gen (₹2)", callback_data="open_image_gen"),
-        telebot.types.InlineKeyboardButton("✂️ Remove BG (₹1)", callback_data="open_rembg")
-    )
-    markup.add(
-        telebot.types.InlineKeyboardButton("✨ Enhance / 4K (₹1)", callback_data="open_enhance"),
-        telebot.types.InlineKeyboardButton("📬 Temp Mail (Free)", callback_data="temp_mail_menu")
-    )
-    markup.add(
-        telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
-        telebot.types.InlineKeyboardButton("🤖 Ask Store AI", callback_data="open_ai_assistant")
-    )
-    markup.add(
-        telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders"),
-        telebot.types.InlineKeyboardButton("🎁 Referral", callback_data="referral")
+        telebot.types.InlineKeyboardButton("💳 Add Wallet Funds", callback_data="add_balance"),
+        telebot.types.InlineKeyboardButton("📦 My Orders", callback_data="orders")
     )
     markup.add(
         telebot.types.InlineKeyboardButton("🎡 Lucky Spin", callback_data="lucky_spin"),
-        telebot.types.InlineKeyboardButton("🎟️ Support Ticket", callback_data="support_ticket")
+        telebot.types.InlineKeyboardButton("🎁 Refer Friends", callback_data="referral")
     )
     markup.add(
-        telebot.types.InlineKeyboardButton("🏷️ Redeem Coupon", callback_data="redeem_coupon")
+        telebot.types.InlineKeyboardButton("🏷️ Redeem Coupon", callback_data="redeem_coupon"),
+        telebot.types.InlineKeyboardButton("🎟️ Support Ticket", callback_data="support_ticket")
     )
-    markup.add(telebot.types.InlineKeyboardButton("👤 FULL PROFILE DASHBOARD", callback_data="profile"))
+    markup.add(telebot.types.InlineKeyboardButton("👤 Full Account Dashboard", callback_data="profile"))
 
     if is_admin:
         markup.add(telebot.types.InlineKeyboardButton("👑 Master Admin Panel", callback_data="admin_panel"))
 
     bot.send_message(chat_id, welcome_text, reply_markup=markup, parse_mode="Markdown")
 
-# --- INSTANT-RESPONSE CALLBACK DISPATCHER ---
+# ==============================================================================
+# CALLBACK QUERY DISPATCHER
+# ==============================================================================
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
-    # FAST-ACK: Acknowledge callback immediately to remove button spinner
-    if call.data not in ["maint_click_alert", "do_lucky_spin"]:
+    if call.data not in ["do_lucky_spin"]:
         try:
             bot.answer_callback_query(call.id)
         except Exception:
@@ -712,7 +422,7 @@ def handle_callback(call):
     user = get_user(user_id)
     if user and user["banned"]:
         try:
-            bot.answer_callback_query(call.id, text="❌ Access Denied: Account Suspended.", show_alert=True)
+            bot.answer_callback_query(call.id, text="❌ Access Denied: Suspended.", show_alert=True)
         except Exception:
             pass
         return
@@ -720,473 +430,220 @@ def handle_callback(call):
     is_admin = (user_id == ADMIN_ID)
     global STORE_UNDER_MAINTENANCE
 
-    admin_bypass = [
-        "admin_panel", "adm_users_list_1", "adm_all_transactions", "adm_check_user",
-        "adm_addbal_menu", "adm_cutbal_menu", "adm_broadcast", "adm_toggle_reseller",
-        "adm_ban_menu", "adm_toggle_maintenance", "adm_view_tickets", "adm_create_coupon",
-        "profile", "orders", "referral", "support_ticket", "main_menu", "open_ai_assistant",
-        "temp_mail_menu", "open_image_gen", "open_rembg", "open_enhance", "open_downloader"
-    ]
+    admin_bypass = ["admin_panel", "adm_toggle_maintenance", "main_menu", "profile", "orders", "add_balance"]
     if STORE_UNDER_MAINTENANCE and not is_admin and call.data not in admin_bypass:
-        bot.send_message(call.message.chat.id, "🛠️ **STORE UNDER MAINTENANCE**\n\nPlease check back shortly.", parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "🛠️ **STORE UNDER MAINTENANCE**\n\nUpgrading inventory servers. Check back shortly!", parse_mode="Markdown")
         return
 
-    if call.data in [
-        "mods_game_select", "add_balance", "profile", "orders", "referral", "support_ticket",
-        "main_menu", "admin_panel", "lucky_spin", "redeem_coupon",
-        "temp_mail_menu", "smm_main_menu", "open_image_gen", "open_rembg", "open_enhance", "open_downloader"
-    ]:
+    # Clear lingering text reply states
+    if call.data in ["ai_catalog", "add_balance", "profile", "orders", "referral", "support_ticket", "main_menu", "admin_panel"]:
         waiting_for_custom_topup.pop(user_id, None)
         waiting_for_support_ticket.pop(user_id, None)
         waiting_for_coupon_code.pop(user_id, None)
-        waiting_for_ai_prompt.pop(user_id, None)
-        waiting_for_image_prompt.pop(user_id, None)
-        waiting_for_rembg_photo.pop(user_id, None)
-        waiting_for_enhance_photo.pop(user_id, None)
-        waiting_for_dl_link.pop(user_id, None)
-        waiting_for_smm_link.pop(user_id, None)
-        waiting_for_smm_qty.pop(user_id, None)
         admin_actions.pop(user_id, None)
         admin_coupon_flow.pop(user_id, None)
 
+    # Navigation Router
     if call.data == "main_menu":
         show_main_menu(call.message.chat.id, user_id)
 
-    elif call.data == "mods_game_select":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🔥 Free Fire (FF)", callback_data="game_ff"))
-        markup.add(telebot.types.InlineKeyboardButton("🎯 Call of Duty Mobile (CODM)", callback_data="game_codm"))
-        markup.add(telebot.types.InlineKeyboardButton("⚔️ Mobile Legends (MLBB)", callback_data="game_mlbb"))
-        markup.add(telebot.types.InlineKeyboardButton("🎱 8 Ball Pool", callback_data="game_8bp"))
-        markup.add(telebot.types.InlineKeyboardButton("⚪ Carrom Pool", callback_data="game_carrom"))
-        markup.add(telebot.types.InlineKeyboardButton("⚽ Snake Soccer Stars", callback_data="game_soccer"))
-        markup.add(telebot.types.InlineKeyboardButton("🍏 iOS Gbox Certificates", callback_data="prod_ios_certs"))
-        markup.add(telebot.types.InlineKeyboardButton("🛠️ Maintenance Products", callback_data="show_maint_list"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
-        safe_edit_message_text("🎮 **— SELECT A GAME —**\n\nChoose your game to view available mods:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "game_ff":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("⚡ Non-Root", callback_data="ff_plat_nr"))
-        markup.add(telebot.types.InlineKeyboardButton("🛡️ Root", callback_data="ff_plat_root"))
-        markup.add(telebot.types.InlineKeyboardButton("🍏 iOS (iPhone)", callback_data="ff_plat_ios"))
-        markup.add(telebot.types.InlineKeyboardButton("💻 PC Version", callback_data="prod_ff_pc_brmod"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        safe_edit_message_text("🔥 **FREE FIRE — SELECT PLATFORM**\n\nChoose your device setup:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "ff_plat_nr":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🛒 ABCD Panel Nonroot", callback_data="prod_ff_nr_abcd"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Bala Mod Nonroot", callback_data="prod_ff_nr_bala"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 XYZ Apk Silent Nonroot", callback_data="prod_ff_nr_silent_apk"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 XYZ Config Proxy Nonroot", callback_data="prod_ff_nr_cfg_proxy"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Silent Cheat Proxy Nonroot", callback_data="prod_ff_nr_sc_proxy"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Silent Cheat Apkmod Nonroot", callback_data="prod_ff_nr_sc_apkmod"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Prime Hook Nonroot", callback_data="prod_ff_nr_prime"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 DripClient Wire Nonroot", callback_data="prod_ff_nr_drip_wire"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 DripClient Proxy Nonroot", callback_data="prod_ff_nr_drip_proxy"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 HG Cheats Proxy Nonroot", callback_data="prod_ff_nr_hg_proxy"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 HG Cheats Prime Proxy Nonroot", callback_data="prod_ff_nr_hg_prime"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 XRAG Nonroot/Root", callback_data="prod_ff_nr_xrag"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Aim Hack Nonroot/Root", callback_data="prod_ff_nr_aimhack"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Pato Team Android", callback_data="prod_ff_nr_pato"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to FF Platforms", callback_data="game_ff"))
-        safe_edit_message_text("⚡ **FREE FIRE (NON-ROOT) MODS**\n\nSelect a mod to view duration packs:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "ff_plat_root":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Silent Cheat Root Android", callback_data="prod_ff_r_silent"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Haxx-Cker Pro Root", callback_data="prod_ff_r_haxx"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Rapid Core Root", callback_data="prod_ff_r_rapid"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 DripClient Root", callback_data="prod_ff_r_drip"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 HG Cheats Apkmod Root", callback_data="prod_ff_r_hg"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to FF Platforms", callback_data="game_ff"))
-        safe_edit_message_text("🛡️ **FREE FIRE (ROOT) MODS**\n\nSelect a mod to view duration packs:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "ff_plat_ios":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Migul iPhone iOS FF", callback_data="prod_ff_ios_migul"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Delta Proxy iOS iPhone", callback_data="prod_ff_ios_delta"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to FF Platforms", callback_data="game_ff"))
-        safe_edit_message_text("🍏 **FREE FIRE (IOS IPHONE) MODS**\n\nSelect a mod to view duration packs:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "game_codm":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🛒 iOS Cloud CODM (30 Days)", callback_data="prod_codm_ios_cloud"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        safe_edit_message_text("🎯 **CALL OF DUTY MOBILE (CODM)**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "game_mlbb":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Fluorite iOS MLBB", callback_data="prod_mlbb_ios_fluorite"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        safe_edit_message_text("⚔️ **MOBILE LEGENDS (MLBB)**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "game_8bp":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Snake 8 Ball Pool Nonroot", callback_data="prod_8bp_snake_nr"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 KOS 8 Ball Pool Virtual", callback_data="prod_8bp_kos_virtual"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 KOS 8 Ball Pool Mod+Root", callback_data="prod_8bp_kos_root"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 iOS Fluorite 8 Ball Pool", callback_data="prod_8bp_ios_fluorite"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        safe_edit_message_text("🎱 **8 BALL POOL MODS**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "game_carrom":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Snake Carrom Pool Nonroot", callback_data="prod_carrom_snake_nr"))
-        markup.add(telebot.types.InlineKeyboardButton("🛒 KOS Carrom Pool Nonroot", callback_data="prod_carrom_kos_nr"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        safe_edit_message_text("⚪ **CARROM POOL MODS**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "game_soccer":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🛒 Snake Soccer Stars Nonroot", callback_data="prod_soccer_snake_nr"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        safe_edit_message_text("⚽ **SNAKE SOCCER STARS MODS**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data.startswith("prod_"):
-        prod_key = call.data.replace("prod_", "")
-        data = CATALOG.get(prod_key)
-        if not data:
-            bot.send_message(call.message.chat.id, "Product not found.")
+    # 1. CATALOG FLOW
+    elif call.data == "ai_catalog":
+        products = cuppon_get_products()
+        if not products:
+            markup = telebot.types.InlineKeyboardMarkup().add(
+                telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
+            )
+            safe_edit_message_text("⚠️ Catalog is updating. Please try again in a few moments.", call.message.chat.id, call.message.message_id, reply_markup=markup)
             return
 
         markup = telebot.types.InlineKeyboardMarkup()
-        for idx, (dur, price) in enumerate(data["items"]):
-            markup.add(telebot.types.InlineKeyboardButton(f"{dur} — ₹{int(price)}", callback_data=f"buykey_{prod_key}_{idx}"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Game Catalog", callback_data="mods_game_select"))
+        for p in products:
+            pkey = p.get("key")
+            pname = p.get("name", "AI Product")
+            stock = p.get("stock", 0)
+            usdt_price = p.get("price_usdt_from", "0.0")
+            price_inr = calculate_inr_price(pkey, usdt_price)
 
+            status_icon = "🟢" if stock > 0 else "🔴"
+            btn_text = f"{status_icon} {pname} — ₹{int(price_inr)} ({stock} in stock)"
+            markup.add(telebot.types.InlineKeyboardButton(btn_text, callback_data=f"view_prod_{pkey}"))
+
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
         safe_edit_message_text(
-            f"🛒 **{data['name']}**\n📌 Select a duration pack below:",
+            "🚀 **AVAILABLE AI ACTIVATION LINKS**\n\n"
+            "Select an AI subscription below to view details and activate:",
             call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
         )
 
-    elif call.data.startswith("buykey_"):
-        parts = call.data.split("_")
-        prod_key = "_".join(parts[1:-1])
-        idx = int(parts[-1])
+    elif call.data.startswith("view_prod_"):
+        pkey = call.data.replace("view_prod_", "")
+        products = cuppon_get_products()
+        prod = next((p for p in products if p.get("key") == pkey), None)
 
-        product = CATALOG.get(prod_key)
-        if not product:
-            bot.send_message(call.message.chat.id, "Product expired.")
+        if not prod:
+            bot.send_message(call.message.chat.id, "❌ Product not found or out of stock.")
             return
 
-        duration_text, price_inr = product["items"][idx]
-        pid = product["pid"]
-        product_name = product["name"]
-        execute_purchase(call, user_id, pid, duration_text, price_inr, product_name)
+        pname = prod.get("name", "AI Link")
+        stock = prod.get("stock", 0)
+        usdt_price = prod.get("price_usdt_from", "0.0")
+        price_inr = calculate_inr_price(pkey, usdt_price)
 
-    elif call.data == "show_maint_list":
         markup = telebot.types.InlineKeyboardMarkup()
-        for p in MAINTENANCE_PRODUCTS:
-            markup.add(telebot.types.InlineKeyboardButton(f"🛠️ {p[:28]}...", callback_data="maint_click_alert"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Games", callback_data="mods_game_select"))
-        safe_edit_message_text("🛠️ **PRODUCTS CURRENTLY UNDER MAINTENANCE**\n\nTap any product to view status:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        if stock > 0:
+            markup.add(telebot.types.InlineKeyboardButton(f"⚡ Buy Now for ₹{int(price_inr)}", callback_data=f"buy_link_{pkey}"))
+        else:
+            markup.add(telebot.types.InlineKeyboardButton("❌ Out of Stock", callback_data="out_of_stock_alert"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="ai_catalog"))
 
-    elif call.data == "maint_click_alert":
+        text = (
+            f"💎 **PRODUCT: {pname}**\n\n"
+            f"📦 **Current Stock:** `{stock} available`\n"
+            f"💰 **Price:** `₹{int(price_inr)}`\n"
+            f"⚡ **Delivery:** Instant Bot Delivery (Direct Activation Link)\n\n"
+            "📌 *Once bought, tap the delivered link while logged into your Google/AI account to upgrade seamlessly.*"
+        )
+        safe_edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "out_of_stock_alert":
         try:
-            bot.answer_callback_query(
-                call.id,
-                text="⚠️ UNDER MAINTENANCE!\nThis product is being updated by developers. No keys can be purchased right now.",
-                show_alert=True
-            )
+            bot.answer_callback_query(call.id, text="⚠️ This product is currently out of stock! Restocking shortly.", show_alert=True)
         except Exception:
             pass
 
-    elif call.data == "open_downloader":
-        waiting_for_dl_link[user_id] = True
-        markup = telebot.types.InlineKeyboardMarkup().add(
-            telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
-        )
-        dl_text = (
-            "📥 **UNIVERSAL VIDEO DOWNLOADER**\n\n"
-            "⚡ Supported Platforms:\n"
-            "• **Instagram** (Reels, Videos, Posts)\n"
-            "• **YouTube Shorts** (Clean HD MP4)\n"
-            "• **TikTok & X (Twitter)**\n\n"
-            "💎 **100% Free** | Direct Telegram Delivery\n\n"
-            "👇 **Paste and send your video link below:**"
-        )
-        if call.message.content_type in ['photo', 'video', 'document']:
-            try:
-                bot.delete_message(call.message.chat.id, call.message.message_id)
-            except Exception:
-                pass
-            bot.send_message(call.message.chat.id, dl_text, parse_mode="Markdown", reply_markup=markup)
-        else:
-            safe_edit_message_text(dl_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+    elif call.data.startswith("buy_link_"):
+        pkey = call.data.replace("buy_link_", "")
+        products = cuppon_get_products()
+        prod = next((p for p in products if p.get("key") == pkey), None)
+        if not prod:
+            bot.send_message(call.message.chat.id, "❌ Product unavailable.")
+            return
 
-    elif call.data == "temp_mail_menu":
-        current = user_temp_mails.get(user_id)
-        markup = telebot.types.InlineKeyboardMarkup()
-        if current:
-            addr = current["address"]
-            text_body = (
-                "📬 **— 100% FREE TEMP MAIL HUB —** 📬\n\n"
-                f"📧 **Active Address:**\n`{addr}`\n*(Tap to copy address)*\n\n"
-                "Use this email to receive registration OTP codes and verification links instantly."
-            )
-            markup.add(telebot.types.InlineKeyboardButton("🔄 Check Inbox", callback_data="tmail_inbox"))
-            markup.add(telebot.types.InlineKeyboardButton("⚡ Generate New Mail", callback_data="tmail_gen_new"))
-        else:
-            text_body = (
-                "📬 **— 100% FREE TEMP MAIL HUB —** 📬\n\n"
-                "⚡ Generate unlimited disposable mailboxes for games & websites.\n"
-                "No payment or pass required. Tap below to generate:"
-            )
-            markup.add(telebot.types.InlineKeyboardButton("⚡ Generate Free Email", callback_data="tmail_gen_new"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
-        safe_edit_message_text(text_body, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        pname = prod.get("name", "AI Product")
+        usdt_price = prod.get("price_usdt_from", "0.0")
+        price_inr = calculate_inr_price(pkey, usdt_price)
 
-    elif call.data == "tmail_gen_new":
-        addr, token = mailtm_create_account()
-        if addr and token:
-            user_temp_mails[user_id] = {"address": addr, "token": token}
+        # Balance check
+        fresh_user = get_user(user_id)
+        if not fresh_user or fresh_user["balance"] < price_inr:
+            cur_bal = fresh_user["balance"] if fresh_user else 0.0
             markup = telebot.types.InlineKeyboardMarkup()
-            markup.add(telebot.types.InlineKeyboardButton("🔄 Check Inbox", callback_data="tmail_inbox"))
-            markup.add(telebot.types.InlineKeyboardButton("⚡ Generate Another", callback_data="tmail_gen_new"))
-            markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+            markup.add(telebot.types.InlineKeyboardButton("💳 Add Wallet Funds", callback_data="add_balance"))
+            markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="ai_catalog"))
             safe_edit_message_text(
-                f"🎉 **Free Temporary Mail Ready!**\n\n📧 **Address:**\n`{addr}`\n\n"
-                "*(Tap to copy)*\n\nOnce you request an OTP on a website/app, tap **🔄 Check Inbox** below.",
+                f"❌ **Insufficient Wallet Balance!**\n\n"
+                f"Item: **{pname}**\n"
+                f"Cost: `₹{price_inr:.2f}`\n"
+                f"Your Balance: `₹{cur_bal:.2f}`\n\n"
+                "Please add funds to your wallet to complete the purchase.",
                 call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
             )
-        else:
-            bot.send_message(call.message.chat.id, "⚠️ Failed to connect to mail server. Try again in 5 seconds.")
-
-    elif call.data == "tmail_inbox":
-        current = user_temp_mails.get(user_id)
-        if not current:
-            bot.send_message(call.message.chat.id, "Generate an email first.")
             return
 
-        msgs = mailtm_fetch_messages(current["token"])
-        markup = telebot.types.InlineKeyboardMarkup()
-        if not msgs:
-            inbox_text = f"📬 **INBOX: `{current['address']}`**\n\n📭 **Inbox is currently empty.**\nWait a few seconds for emails to deliver, then tap refresh."
+        # Atomic debit prior to API request
+        atomic_update_balance(user_id, -price_inr, spend_add=price_inr, order_add=1)
+        proc_msg = bot.send_message(call.message.chat.id, f"⏳ Generating secure activation link for **{pname}**...")
+
+        # Purchase through Cuppon'sHub API
+        res = cuppon_purchase_product(pkey, quantity=1)
+
+        try:
+            bot.delete_message(call.message.chat.id, proc_msg.message_id)
+        except Exception:
+            pass
+
+        if res.get("ok") and "order" in res:
+            order_info = res["order"]
+            items = order_info.get("items", [])
+            delivered_item = items[0] if items else "Link generation pending - check My Orders"
+            reseller_order_id = order_info.get("order_id", "N/A")
+
+            # Save in database
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn = get_db_connection()
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        'INSERT INTO orders (user_id, product_name, delivered_item, price, reseller_order_id, date) VALUES (%s, %s, %s, %s, %s, %s)',
+                        (user_id, pname, str(delivered_item), price_inr, reseller_order_id, now_str)
+                    )
+                    conn.commit()
+                    cur.close()
+                finally:
+                    release_db_connection(conn)
+
+            log_bot_transaction(user_id, "PURCHASE", price_inr, f"Bought {pname} (Order: {reseller_order_id})")
+
+            upd_user = get_user(user_id)
+            markup = telebot.types.InlineKeyboardMarkup()
+            markup.add(telebot.types.InlineKeyboardButton("📦 View All Orders", callback_data="orders"))
+            markup.add(telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu"))
+
+            success_text = (
+                "🎉 **ACTIVATION LINK READY!**\n\n"
+                f"🏷️ **Product:** {pname}\n"
+                f"🆔 **Order ID:** `{reseller_order_id}`\n\n"
+                f"🔗 **Your Activation Link:**\n`{delivered_item}`\n\n"
+                "*(Tap the link above to copy, or open it in your browser while logged into your account to activate.)*\n\n"
+                f"💰 Amount Charged: `₹{price_inr:.2f}`\n"
+                f"💳 Remaining Balance: `₹{upd_user['balance']:.2f}`"
+            )
+            bot.send_message(call.message.chat.id, success_text, parse_mode="Markdown", reply_markup=markup)
+
         else:
-            inbox_text = f"📬 **INBOX: `{current['address']}`**\n\nIncoming messages:\n\n"
-            for m in msgs[:6]:
-                sender = m.get("from", {}).get("address", "Unknown")
-                subject = m.get("subject", "(No Subject)")
-                intro = m.get("intro", "")
-                m_id = m.get("id")
-                inbox_text += f"📩 **From:** `{sender}`\n📌 **Subject:** {subject}\n💬 {intro[:80]}...\n-------------------\n"
-                markup.add(telebot.types.InlineKeyboardButton(f"📖 Read: {subject[:25]}", callback_data=f"tmail_read_{m_id}"))
+            # Automated refund on failure
+            atomic_update_balance(user_id, price_inr, spend_add=-price_inr, order_add=-1)
+            err_msg = res.get("error", "Stock unavailable or server error")
+            log_bot_transaction(user_id, "REFUND", price_inr, f"Auto-refunded: {err_msg}")
 
-        markup.add(telebot.types.InlineKeyboardButton("🔄 Refresh Inbox", callback_data="tmail_inbox"))
-        markup.add(telebot.types.InlineKeyboardButton("⚡ New Email", callback_data="tmail_gen_new"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Temp Mail", callback_data="temp_mail_menu"))
-        safe_edit_message_text(inbox_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data.startswith("tmail_read_"):
-        current = user_temp_mails.get(user_id)
-        if not current:
-            return
-        m_id = call.data.replace("tmail_read_", "")
-        detail = mailtm_fetch_message_detail(current["token"], m_id)
-        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Inbox", callback_data="tmail_inbox"))
-        if detail:
-            sender = detail.get("from", {}).get("address", "Unknown")
-            subject = detail.get("subject", "(No Subject)")
-            text_body = detail.get("text", "(No Body)")
-            safe_edit_message_text(f"📩 **MESSAGE DETAILS**\n\n👤 From: `{sender}`\n📌 Subject: {subject}\n\n📝 Body:\n{text_body[:3500]}", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        else:
-            bot.send_message(call.message.chat.id, "❌ Unable to load email content.", reply_markup=markup)
-
-    # --- SMM BOOSTING MENUS WITH CUSTOM QUANTITY ---
-    elif call.data == "smm_main_menu":
-        smm_text = (
-            "🚀 **— SOCIAL MEDIA BOOSTING HUB —** 🚀\n\n"
-            "Boost your reach with instant automated delivery:\n\n"
-            "🔥 **Instagram Reel Views** — Only ₹1 / 1,000\n"
-            "👥 **Telegram Members** — Only ₹35 / 1,000 (Non-Drop 30D Refill)\n"
-            "❤️ **Instagram Likes** — Indian Real Accounts\n"
-            "🇮🇳 **Instagram Followers** — 100% Indian Profiles\n\n"
-            "👇 **Choose a service category below:**"
-        )
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🔥 IG Reel Views (₹1/1k)", callback_data="smm_cat_views"))
-        markup.add(telebot.types.InlineKeyboardButton("👥 TG Channel Members (₹35/1k)", callback_data="smm_cat_tg"))
-        markup.add(telebot.types.InlineKeyboardButton("❤️ IG Indian Likes", callback_data="smm_cat_likes"))
-        markup.add(telebot.types.InlineKeyboardButton("🇮🇳 IG Indian Followers", callback_data="smm_cat_followers"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
-        safe_edit_message_text(smm_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "smm_cat_views":
-        v_text = "🔥 **INSTAGRAM REELS VIEWS** (Service ID: 14686)\n⚡ Rate: ₹1 per 1,000 Views (Min: 100 | Max: 1,000,000)\n\nSelect a preset pack or type your own quantity:"
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("⚡ 1,000 Views — ₹1", callback_data="smm_buy_14686_1000_1.0_IG_Reel_Views"))
-        markup.add(telebot.types.InlineKeyboardButton("⚡ 5,000 Views — ₹5", callback_data="smm_buy_14686_5000_5.0_IG_Reel_Views"))
-        markup.add(telebot.types.InlineKeyboardButton("⚡ 10,000 Views — ₹10", callback_data="smm_buy_14686_10000_10.0_IG_Reel_Views"))
-        markup.add(telebot.types.InlineKeyboardButton("⚡ 50,000 Views — ₹45", callback_data="smm_buy_14686_50000_45.0_IG_Reel_Views"))
-        markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_14686"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
-        safe_edit_message_text(v_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "smm_cat_tg":
-        tg_text = "👥 **TELEGRAM CHANNEL MEMBERS** (Service ID: 14811)\n🛡️ Rate: ₹35 per 1,000 Members (Min: 500 | Max: 100,000)\n\nSelect a preset pack or type your own quantity:"
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("👥 500 Members — ₹18", callback_data="smm_buy_14811_500_18.0_TG_Members"))
-        markup.add(telebot.types.InlineKeyboardButton("👥 1,000 Members — ₹35", callback_data="smm_buy_14811_1000_35.0_TG_Members"))
-        markup.add(telebot.types.InlineKeyboardButton("👥 2,000 Members — ₹70", callback_data="smm_buy_14811_2000_70.0_TG_Members"))
-        markup.add(telebot.types.InlineKeyboardButton("👥 5,000 Members — ₹170", callback_data="smm_buy_14811_5000_170.0_TG_Members"))
-        markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_14811"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
-        safe_edit_message_text(tg_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "smm_cat_likes":
-        lk_text = "❤️ **INSTAGRAM INDIAN LIKES** (Service ID: 14166)\n🇮🇳 Rate: ₹20 per 1,000 Likes (Min: 50 | Max: 50,000)\n\nSelect a preset pack or type your own quantity:"
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("❤️ 100 Likes — ₹3", callback_data="smm_buy_14166_100_3.0_IG_Likes"))
-        markup.add(telebot.types.InlineKeyboardButton("❤️ 500 Likes — ₹12", callback_data="smm_buy_14166_500_12.0_IG_Likes"))
-        markup.add(telebot.types.InlineKeyboardButton("❤️ 1,000 Likes — ₹20", callback_data="smm_buy_14166_1000_20.0_IG_Likes"))
-        markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_14166"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
-        safe_edit_message_text(lk_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "smm_cat_followers":
-        fol_text = "🇮🇳 **INSTAGRAM INDIAN FOLLOWERS** (Service ID: 9895)\n🇮🇳 Rate: ₹120 per 1,000 Followers (Min: 50 | Max: 50,000)\n\nSelect a preset pack or type your own quantity:"
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("🇮🇳 100 Followers — ₹15", callback_data="smm_buy_9895_100_15.0_IG_Followers"))
-        markup.add(telebot.types.InlineKeyboardButton("🇮🇳 500 Followers — ₹65", callback_data="smm_buy_9895_500_65.0_IG_Followers"))
-        markup.add(telebot.types.InlineKeyboardButton("🇮🇳 1,000 Followers — ₹120", callback_data="smm_buy_9895_1000_120.0_IG_Followers"))
-        markup.add(telebot.types.InlineKeyboardButton("✍️ Type Custom Quantity", callback_data="smm_custom_9895"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu"))
-        safe_edit_message_text(fol_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data.startswith("smm_custom_"):
-        srv_id = call.data.replace("smm_custom_", "")
-        srv = SMM_SERVICES.get(srv_id)
-        if not srv:
-            bot.send_message(call.message.chat.id, "Service not found.")
-            return
-
-        waiting_for_smm_qty[user_id] = srv_id
-        markup = telebot.types.InlineKeyboardMarkup().add(
-            telebot.types.InlineKeyboardButton("🔙 Cancel", callback_data="smm_main_menu")
-        )
-        safe_edit_message_text(
-            f"✍️ **CUSTOM ORDER: {srv['name']}**\n\n"
-            f"📊 **Limits:** Min {srv['min']:,} — Max {srv['max']:,}\n"
-            f"💰 **Rate:** ₹{srv['rate']} per 1,000\n\n"
-            f"👇 **Reply with the exact quantity you want (e.g. `2500`):**",
-            call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
-        )
-
-    elif call.data.startswith("smm_buy_"):
-        parts = call.data.split("_")
-        srv_id = parts[2]
-        qty = int(parts[3])
-        cost = float(parts[4])
-        srv_name = " ".join(parts[5:])
-
-        fresh_user = get_user(user_id)
-        if not fresh_user or fresh_user["balance"] < cost:
-            cur_b = fresh_user["balance"] if fresh_user else 0.0
+            markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="ai_catalog"))
             bot.send_message(
                 call.message.chat.id,
-                f"❌ **Insufficient Balance!**\nRequired: ₹{cost:.2f} | Balance: ₹{cur_b:.2f}\n\nPlease add balance to continue.",
-                parse_mode="Markdown",
-                reply_markup=telebot.types.InlineKeyboardMarkup().add(
-                    telebot.types.InlineKeyboardButton("💳 Add Balance Now", callback_data="add_balance"),
-                    telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu")
-                )
+                f"❌ **Purchase Failed (Funds Refunded)**\n\nReason: `{err_msg}`\nYour wallet balance was not deducted.",
+                parse_mode="Markdown", reply_markup=markup
             )
-            return
 
-        waiting_for_smm_link[user_id] = {
-            "service_id": srv_id,
-            "quantity": qty,
-            "cost": cost,
-            "name": srv_name
-        }
-
-        markup = telebot.types.InlineKeyboardMarkup().add(
-            telebot.types.InlineKeyboardButton("🔙 Cancel & Back", callback_data="smm_main_menu")
-        )
-        instruction = "your Instagram post/reel link" if "Views" in srv_name or "Likes" in srv_name else "your Instagram profile link"
-        if "TG" in srv_name:
-            instruction = "your Public Telegram channel/group link (`https://t.me/...`)"
-
-        prompt_text = (
-            f"🛒 **Confirm Order: {srv_name}**\n\n"
-            f"📦 **Quantity:** {qty:,}\n"
-            f"💰 **Total Cost:** ₹{cost:.2f}\n\n"
-            f"👇 **Reply with {instruction}:**\n"
-            "*(Make sure your account/channel is PUBLIC)*"
-        )
-        safe_edit_message_text(prompt_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "open_image_gen":
-        waiting_for_image_prompt[user_id] = True
-        markup = telebot.types.InlineKeyboardMarkup().add(
-            telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
-        )
-        text_prompt = (
-            f"🎨 **AI IMAGE GENERATOR (FLUX 4K)**\n\n"
-            f"⚡ Rate: **₹{IMAGE_FEE:.2f} per generation**\n\n"
-            "Generate esports mascots, gaming thumbnails, wallpapers, or anime characters.\n\n"
-            "👇 **Type and reply with your prompt below:**\n"
-            "*(Example: `Cyberpunk futuristic samurai warrior with glowing neon katana, 4k ultra detailed wallpaper`)*"
-        )
-        if call.message.content_type in ['photo', 'video', 'document']:
+    # 2. ORDERS LIST
+    elif call.data == "orders":
+        conn = get_db_connection()
+        rows = []
+        if conn:
             try:
-                bot.delete_message(call.message.chat.id, call.message.message_id)
+                cur = conn.cursor()
+                cur.execute('SELECT product_name, delivered_item, price, date, reseller_order_id FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT 10', (user_id,))
+                rows = cur.fetchall()
+                cur.close()
             except Exception:
-                pass
-            bot.send_message(call.message.chat.id, text_prompt, parse_mode="Markdown", reply_markup=markup)
-        else:
-            safe_edit_message_text(text_prompt, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+                rows = []
+            finally:
+                release_db_connection(conn)
 
-    elif call.data == "open_rembg":
-        waiting_for_rembg_photo[user_id] = True
-        markup = telebot.types.InlineKeyboardMarkup().add(
-            telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
-        )
-        rembg_text = (
-            "✂️ **AI BACKGROUND REMOVER**\n\n"
-            f"⚡ Rate: **₹{REMBG_FEE:.2f} per cutout**\n\n"
-            "Send an avatar, gaming screenshot, or portrait to get a clean, transparent PNG.\n\n"
-            "👇 **Send your image below as a Photo or Document:**"
-        )
-        if call.message.content_type in ['photo', 'video', 'document']:
-            try:
-                bot.delete_message(call.message.chat.id, call.message.message_id)
-            except Exception:
-                pass
-            bot.send_message(call.message.chat.id, rembg_text, parse_mode="Markdown", reply_markup=markup)
+        if not rows:
+            text_hist = "📦 **You have no past orders.**\nVisit the catalog to purchase AI activation links!"
         else:
-            safe_edit_message_text(rembg_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+            text_hist = "🛍️ **— YOUR PAST ORDERS (Last 10) —**\n\n"
+            for r in rows:
+                text_hist += (
+                    f"🏷️ **{r[0]}**\n"
+                    f"🔗 `{r[1]}`\n"
+                    f"🆔 Order: `{r[4]}` | 💰 ₹{r[2]} | 📅 {r[3]}\n"
+                    "------------------------------------\n"
+                )
+        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu"))
+        safe_edit_message_text(text_hist[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    elif call.data == "open_enhance":
-        waiting_for_enhance_photo[user_id] = True
-        markup = telebot.types.InlineKeyboardMarkup().add(
-            telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
-        )
-        enh_text = (
-            "✨ **AI IMAGE ENHANCER & UPSCALER**\n\n"
-            f"⚡ Rate: **₹{ENHANCE_FEE:.2f} per enhancement**\n\n"
-            "Sharpen blurry photos, boost dynamic contrast, and upscale resolution to high-definition.\n\n"
-            "👇 **Send the photo you want to enhance:**"
-        )
-        if call.message.content_type in ['photo', 'video', 'document']:
-            try:
-                bot.delete_message(call.message.chat.id, call.message.message_id)
-            except Exception:
-                pass
-            bot.send_message(call.message.chat.id, enh_text, parse_mode="Markdown", reply_markup=markup)
-        else:
-            safe_edit_message_text(enh_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
+    # 3. WALLET TOPUP
     elif call.data == "add_balance":
         waiting_for_custom_topup[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         fresh_user = get_user(user_id)
         current_bal = fresh_user['balance'] if fresh_user else 0.0
         safe_edit_message_text(
-            f"💰 **— ADD BALANCE —** 💰\n\n💳 Current Balance: ₹{current_bal:.2f}\n\n"
-            "👇 **Reply with the amount in Rupees to add (e.g. `100`):**",
+            f"💰 **— ADD WALLET BALANCE —**\n\n"
+            f"💳 Current Balance: `₹{current_bal:.2f}`\n\n"
+            "👇 **Type the exact amount in Rupees you want to deposit (e.g. `100`):**",
             call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
         )
 
@@ -1196,34 +653,34 @@ def handle_callback(call):
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        bot.send_message(call.message.chat.id, "❌ Top-up canceled.", reply_markup=telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")))
+        bot.send_message(call.message.chat.id, "❌ Deposit request canceled.", reply_markup=telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")))
 
+    # 4. PROFILE DASHBOARD
     elif call.data == "profile":
         fresh = get_user(user_id)
         if not fresh:
-            bot.send_message(call.message.chat.id, "User not found.")
             return
         role = "👑 Master Admin" if is_admin else f"👤 {fresh['role']}"
-        status_badge = "🚫 Banned" if fresh["banned"] else "🟢 Verified & Active"
+        status_badge = "🚫 Suspended" if fresh["banned"] else "🟢 Active & Verified"
 
         profile_text = (
             "╔═══════════════════════════════╗\n"
             "      👤 **USER ACCOUNT DASHBOARD**\n"
             "╚═══════════════════════════════╝\n\n"
-            f"🏷️ **User Tag:** {fresh['name']}\n"
+            f"🏷️ **User:** {fresh['name']}\n"
             f"🆔 **Telegram ID:** `{user_id}`\n"
             f"🎖️ **Account Tier:** `{role}`\n"
-            f"🛡️ **Account Status:** {status_badge}\n"
+            f"🛡️ **Status:** {status_badge}\n"
             f"📅 **Member Since:** `{fresh['joined']}`\n\n"
-            "┌─── 💳 **WALLET & SPENDING** ────────┐\n"
-            f"│ 💰 **Current Balance:** ₹{fresh['balance']:.2f}\n"
-            f"│ 💸 **Lifetime Spent:**  ₹{fresh['total_spent']:.2f}\n"
+            "┌─── 💳 **WALLET & PURCHASES** ───────┐\n"
+            f"│ 💰 **Current Balance:**  ₹{fresh['balance']:.2f}\n"
+            f"│ 💸 **Lifetime Spent:**   ₹{fresh['total_spent']:.2f}\n"
             f"│ 📦 **Orders Completed:** {fresh['orders_count']}\n"
             "└────────────────────────────────┘\n\n"
             "┌─── 🎁 **REWARDS & BONUSES** ────────┐\n"
-            f"│ 👥 **Total Referrals:** {fresh.get('total_referrals', 0)}\n"
-            f"│ 🎡 **Bonus Spins Bank:** {fresh.get('bonus_spins', 0)}\n"
-            f"│ ⏱️ **Last Daily Spin:**  `{fresh.get('last_spin_time') or 'Available Now'}`\n"
+            f"│ 👥 **Total Referrals:**  {fresh.get('total_referrals', 0)}\n"
+            f"│ 🎡 **Bonus Spins:**      {fresh.get('bonus_spins', 0)}\n"
+            f"│ ⏱️ **Daily Spin Status:** `{fresh.get('last_spin_time') or 'Ready to spin!'}`\n"
             "└────────────────────────────────┘"
         )
         markup = telebot.types.InlineKeyboardMarkup()
@@ -1236,47 +693,21 @@ def handle_callback(call):
             telebot.types.InlineKeyboardButton("🎁 Refer Friends", callback_data="referral")
         )
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
+        safe_edit_message_text(profile_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-        if call.message.content_type in ['photo', 'video', 'document']:
-            try:
-                bot.delete_message(call.message.chat.id, call.message.message_id)
-            except Exception:
-                pass
-            bot.send_message(call.message.chat.id, profile_text, parse_mode="Markdown", reply_markup=markup)
-        else:
-            safe_edit_message_text(profile_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
-    elif call.data == "orders":
-        conn = get_db_connection()
-        rows = []
-        if conn:
-            try:
-                cur = conn.cursor()
-                cur.execute('SELECT duration, license_key, price, date FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT 10', (user_id,))
-                rows = cur.fetchall()
-                cur.close()
-            except Exception:
-                rows = []
-            finally:
-                release_db_connection(conn)
-
-        if not rows:
-            text_hist = "📦 You have no past orders."
-        else:
-            text_hist = "🛍️ **— MY ORDERS (Last 10) —** 🛍️\n\n"
-            for r in rows:
-                text_hist += f"🛒 {r[0]}\n🔑 `{r[1]}`\n💰 ₹{r[2]} | 📅 {r[3]}\n-------------------\n"
-        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        safe_edit_message_text(text_hist, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-
+    # 5. REFERRAL SYSTEM
     elif call.data == "referral":
         bot_username = bot.get_me().username
+        ref_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         safe_edit_message_text(
-            f"🎁 **REFERRAL PROGRAM**\n\nShare your link to invite friends:\n`https://t.me/{bot_username}?start=ref_{user_id}`",
+            f"🎁 **REFERRAL & EARN PROGRAM**\n\n"
+            "Share your exclusive referral link with friends. For every friend who registers, you receive **1 Free Lucky Spin**!\n\n"
+            f"🔗 **Your Referral Link:**\n`{ref_link}`",
             call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
         )
 
+    # 6. LUCKY SPIN
     elif call.data == "lucky_spin":
         fresh = get_user(user_id)
         bonus_spins = fresh.get("bonus_spins", 0) if fresh else 0
@@ -1293,12 +724,12 @@ def handle_callback(call):
 
         markup = telebot.types.InlineKeyboardMarkup()
         if can_spin:
-            markup.add(telebot.types.InlineKeyboardButton("🎯 SPIN NOW", callback_data="do_lucky_spin"))
+            markup.add(telebot.types.InlineKeyboardButton("🎯 SPIN WHEEL NOW", callback_data="do_lucky_spin"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        safe_edit_message_text("🎡 **LUCKY SPIN SYSTEM**\n\nSpin daily to win free wallet rewards!", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🎡 **DAILY LUCKY SPIN**\n\nSpin daily to win free wallet rewards of up to ₹10!", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "do_lucky_spin":
-        reward = random.choice([0, 0, 0, 1, 1, 2, 5])
+        reward = random.choice([0, 0, 1, 1, 2, 5, 10])
         atomic_update_balance(user_id, float(reward))
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn = get_db_connection()
@@ -1314,60 +745,62 @@ def handle_callback(call):
                 release_db_connection(conn)
 
         try:
-            bot.answer_callback_query(call.id, text=f"Reward: ₹{reward}", show_alert=True)
+            bot.answer_callback_query(call.id, text=f"🎉 Result: ₹{reward} reward!", show_alert=True)
         except Exception:
             pass
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        res_msg = f"🎉 Won ₹{reward} balance!" if reward > 0 else "😢 No reward this time!"
-        safe_edit_message_text(f"🎡 **SPIN RESULT**\n\n{res_msg}", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        res_text = f"🎉 Congratulations! ₹{reward} credited to your wallet balance." if reward > 0 else "😢 Better luck next time! Spin again tomorrow."
+        safe_edit_message_text(f"🎡 **SPIN RESULT**\n\n{res_text}", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
+    # 7. SUPPORT TICKETS
     elif call.data == "support_ticket":
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton("💳 Payment Issue", callback_data="tkt_Payment"))
-        markup.add(telebot.types.InlineKeyboardButton("🔑 Mod Key Issue", callback_data="tkt_Key"))
-        markup.add(telebot.types.InlineKeyboardButton("🚀 SMM Boosting Issue", callback_data="tkt_SMM"))
-        markup.add(telebot.types.InlineKeyboardButton("💬 Other Issue", callback_data="tkt_Other"))
+        markup.add(telebot.types.InlineKeyboardButton("🔗 Activation Link Help", callback_data="tkt_Link"))
+        markup.add(telebot.types.InlineKeyboardButton("💬 Other Inquiries", callback_data="tkt_Other"))
         markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        safe_edit_message_text("🎟️ **SUPPORT TICKET**\n\nSelect your category:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🎟️ **CUSTOMER SUPPORT**\n\nSelect your inquiry topic:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data.startswith("tkt_"):
         cat = call.data.replace("tkt_", "")
         waiting_for_support_ticket[user_id] = cat
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Cancel", callback_data="main_menu"))
-        safe_edit_message_text(f"🎟️ Category: `{cat}`\n\n👇 Reply with your issue/proof message:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text(f"🎟️ Category: `{cat}`\n\n👇 **Reply with your issue and details:**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
+    # 8. COUPONS
     elif call.data == "redeem_coupon":
         waiting_for_coupon_code[user_id] = True
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Cancel", callback_data="main_menu"))
-        safe_edit_message_text("🏷️ **REDEEM COUPON**\n\n👇 Reply with your code below:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        safe_edit_message_text("🏷️ **REDEEM COUPON**\n\n👇 Type your promotional code below:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    elif call.data == "open_ai_assistant":
-        waiting_for_ai_prompt[user_id] = True
-        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        safe_edit_message_text(
-            "🤖 **STORE AI ASSISTANT (Continuous Chat)**\n\n"
-            "Ask me anything about mod keys, boosting packages, or store policies.\n\n"
-            "👇 **Type your questions below:**",
-            call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup
+    # ==========================================================================
+    # MASTER ADMIN PANEL
+    # ==========================================================================
+    elif call.data == "admin_panel" and is_admin:
+        m_status = "🔴 OFF (Store Active)" if not STORE_UNDER_MAINTENANCE else "🟢 ON (Under Maintenance)"
+        reseller_bal = cuppon_get_balance()
+        bal_str = f"${reseller_bal:.2f} USDT" if reseller_bal is not None else "⚠️ Connection Failed"
+
+        admin_text = (
+            "👑 **MASTER ADMIN DASHBOARD**\n\n"
+            f"🌐 **Cuppon'sHub Reseller Balance:** `{bal_str}`\n"
+            f"🛠️ **Maintenance Mode:** `{m_status}`\n\n"
+            "Select an administrative action:"
         )
 
-    # MASTER ADMIN PANEL
-    elif call.data == "admin_panel" and is_admin:
-        m_status = "🔴 OFF (Active)" if not STORE_UNDER_MAINTENANCE else "🟢 ON (Maintenance)"
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton(f"🛠️ Toggle Maintenance: {m_status}", callback_data="adm_toggle_maintenance"))
         markup.add(telebot.types.InlineKeyboardButton("🎟️ View Support Tickets", callback_data="adm_view_tickets"))
-        markup.add(telebot.types.InlineKeyboardButton("🏷️ Create Coupon Code", callback_data="adm_create_coupon"))
-        markup.add(telebot.types.InlineKeyboardButton("📋 Users List", callback_data="adm_users_list_1"))
-        markup.add(telebot.types.InlineKeyboardButton("📊 All Bot Transactions", callback_data="adm_all_transactions"))
-        markup.add(telebot.types.InlineKeyboardButton("🔍 Check User Info", callback_data="adm_check_user"))
-        markup.add(telebot.types.InlineKeyboardButton("💰 Add Balance", callback_data="adm_addbal_menu"))
-        markup.add(telebot.types.InlineKeyboardButton("✂️ Cut Balance", callback_data="adm_cutbal_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("🏷️ Create Promo Coupon", callback_data="adm_create_coupon"))
+        markup.add(telebot.types.InlineKeyboardButton("📋 Registered Users", callback_data="adm_users_list_1"))
+        markup.add(telebot.types.InlineKeyboardButton("📊 Recent Transactions", callback_data="adm_all_transactions"))
+        markup.add(telebot.types.InlineKeyboardButton("🔍 Inspect User Profile", callback_data="adm_check_user"))
+        markup.add(telebot.types.InlineKeyboardButton("💰 Credit Balance", callback_data="adm_addbal_menu"))
+        markup.add(telebot.types.InlineKeyboardButton("✂️ Debit Balance", callback_data="adm_cutbal_menu"))
         markup.add(telebot.types.InlineKeyboardButton("🔨 Ban / Unban User", callback_data="adm_ban_menu"))
-        markup.add(telebot.types.InlineKeyboardButton("🤝 Toggle Reseller Role", callback_data="adm_toggle_reseller"))
-        markup.add(telebot.types.InlineKeyboardButton("📢 Broadcast Message", callback_data="adm_broadcast"))
-        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        safe_edit_message_text("👑 **MASTER ADMIN PANEL**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        markup.add(telebot.types.InlineKeyboardButton("📢 Send Global Broadcast", callback_data="adm_broadcast"))
+        markup.add(telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
+        safe_edit_message_text(admin_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "adm_toggle_maintenance" and is_admin:
         STORE_UNDER_MAINTENANCE = not STORE_UNDER_MAINTENANCE
@@ -1375,7 +808,7 @@ def handle_callback(call):
 
     elif call.data == "adm_create_coupon" and is_admin:
         admin_coupon_flow[user_id] = {"step": "code"}
-        bot.send_message(call.message.chat.id, "🏷️ **CREATE COUPON**\n\nReply with the code name (e.g. `PROMO50`):", parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "🏷️ **CREATE PROMO CODE**\n\nReply with the code name (e.g. `WELCOME50`):", parse_mode="Markdown")
 
     elif call.data.startswith("adm_coupon_type_") and is_admin:
         r_type = call.data.split("_")[3]
@@ -1398,7 +831,7 @@ def handle_callback(call):
                 rows = []
             finally:
                 release_db_connection(conn)
-        t_text = "🎟️ **RECENT TICKETS**\n\n" + ("\n".join([f"#{r[0]} | User: `{r[1]}` [{r[2]}]\n💬 {r[3]}" for r in rows]) if rows else "No open tickets.")
+        t_text = "🎟️ **RECENT TICKETS**\n\n" + ("\n".join([f"#{r[0]} | User `{r[1]}` [{r[2]}]\n💬 {r[3]}" for r in rows]) if rows else "No open tickets.")
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
         safe_edit_message_text(t_text[:4000], call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
@@ -1415,7 +848,7 @@ def handle_callback(call):
                 rows = []
             finally:
                 release_db_connection(conn)
-        u_text = "📋 **USERS REGISTERED (Last 15)**\n\n" + "\n".join([f"`{r[0]}` | {r[1]} | ₹{r[2]:.2f}" for r in rows])
+        u_text = "📋 **REGISTERED USERS (Recent 15)**\n\n" + "\n".join([f"`{r[0]}` | {r[1]} | ₹{r[2]:.2f}" for r in rows])
         markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel"))
         safe_edit_message_text(u_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
@@ -1438,216 +871,22 @@ def handle_callback(call):
 
     elif call.data == "adm_broadcast" and is_admin:
         admin_actions[user_id] = "broadcast"
-        bot.send_message(call.message.chat.id, "📢 Send your announcement text:")
+        bot.send_message(call.message.chat.id, "📢 Send the announcement message to broadcast:")
 
-    elif call.data in ["adm_addbal_menu", "adm_cutbal_menu", "adm_check_user", "adm_ban_menu", "adm_toggle_reseller"] and is_admin:
+    elif call.data in ["adm_addbal_menu", "adm_cutbal_menu", "adm_check_user", "adm_ban_menu"] and is_admin:
         act = {
             "adm_addbal_menu": "addbal",
             "adm_cutbal_menu": "cutbal",
             "adm_check_user": "checkuser",
-            "adm_ban_menu": "ban",
-            "adm_toggle_reseller": "reseller"
+            "adm_ban_menu": "ban"
         }[call.data]
         admin_actions[user_id] = act
-        prompt = "Send: `USER_ID AMOUNT`" if act in ["addbal", "cutbal"] else "Send: `USER_ID`"
+        prompt = "Format: `USER_ID AMOUNT`" if act in ["addbal", "cutbal"] else "Format: `USER_ID`"
         bot.send_message(call.message.chat.id, f"💬 {prompt}", parse_mode="Markdown")
 
-# --- RESELLER PURCHASE API DISPATCH ---
-def execute_purchase(call, user_id, product_id, duration_text, price_inr, product_name):
-    fresh_user = get_user(user_id)
-    if not fresh_user or fresh_user["balance"] < price_inr:
-        cur_b = fresh_user["balance"] if fresh_user else 0.0
-        bot.send_message(
-            call.message.chat.id,
-            f"❌ **Insufficient Balance!**\nRequired: ₹{price_inr:.2f} | Balance: ₹{cur_b:.2f}",
-            parse_mode="Markdown",
-            reply_markup=telebot.types.InlineKeyboardMarkup().add(
-                telebot.types.InlineKeyboardButton("💳 Add Balance Now", callback_data="add_balance"),
-                telebot.types.InlineKeyboardButton("🔙 Back to Catalog", callback_data="mods_game_select")
-            )
-        )
-        return
-
-    atomic_update_balance(user_id, -price_inr, spend_add=price_inr, order_add=1)
-    proc_msg = bot.send_message(call.message.chat.id, f"⏳ Contacting panel for {product_name}...")
-
-    payload = {
-        'api_key': BANTI_API_KEY,
-        'action': 'buy',
-        'product_id': str(product_id),
-        'duration': duration_text
-    }
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'x-master-key': BANTI_MASTER_KEY,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-    }
-
-    try:
-        api_res = requests.post(BANTI_API_URL, data=payload, headers=headers, timeout=25)
-        raw_resp = api_res.text.strip()
-        license_key = None
-
-        try:
-            res_json = api_res.json()
-            license_key = res_json.get("key") or res_json.get("license") or res_json.get("data")
-        except Exception:
-            if raw_resp and "error" not in raw_resp.lower() and "html" not in raw_resp.lower():
-                license_key = raw_resp
-
-        try:
-            bot.delete_message(call.message.chat.id, proc_msg.message_id)
-        except Exception:
-            pass
-
-        if license_key and "error" not in str(license_key).lower():
-            log_bot_transaction(user_id, "PURCHASE", price_inr, f"Bought {product_name} ({duration_text})")
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            conn = get_db_connection()
-            if conn:
-                try:
-                    cur = conn.cursor()
-                    cur.execute('INSERT INTO orders (user_id, duration, license_key, price, date) VALUES (%s, %s, %s, %s, %s)', (user_id, duration_text, str(license_key), price_inr, now_str))
-                    conn.commit()
-                    cur.close()
-                finally:
-                    release_db_connection(conn)
-
-            u_upd = get_user(user_id)
-            markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-            bot.send_message(
-                call.message.chat.id,
-                f"🎉 **KEY GENERATED SUCCESSFULLY!**\n\n📌 **Product:** {product_name}\n⏱️ **Duration:** {duration_text}\n🔑 **Key:**\n`{license_key}`\n\n💰 Cost: ₹{price_inr}\n💳 Remaining Balance: ₹{u_upd['balance']:.2f}",
-                parse_mode="Markdown", reply_markup=markup
-            )
-        else:
-            atomic_update_balance(user_id, price_inr, spend_add=-price_inr, order_add=-1)
-            log_bot_transaction(user_id, "REFUND", price_inr, f"API Purchase Failed - Refunded for {product_name}")
-            markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-            bot.send_message(call.message.chat.id, f"❌ **Purchase Failed (Balance Refunded)**\nServer response: `{raw_resp[:300]}`", parse_mode="Markdown", reply_markup=markup)
-
-    except Exception as e:
-        try:
-            bot.delete_message(call.message.chat.id, proc_msg.message_id)
-        except Exception:
-            pass
-        atomic_update_balance(user_id, price_inr, spend_add=-price_inr, order_add=-1)
-        log_bot_transaction(user_id, "REFUND", price_inr, f"Exception - Refunded for {product_name}")
-        markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
-        bot.send_message(call.message.chat.id, f"⚠️ Connection error, balance refunded: {str(e)}", reply_markup=markup)
-
-# --- SMM CUSTOM QUANTITY INPUT HANDLER ---
-@bot.message_handler(func=lambda m: m.from_user.id in waiting_for_smm_qty)
-def handle_smm_custom_quantity(message):
-    user_id = message.from_user.id
-    srv_id = waiting_for_smm_qty.pop(user_id, None)
-    srv = SMM_SERVICES.get(srv_id)
-    if not srv:
-        return
-
-    text = message.text.strip()
-    if text.startswith("/"):
-        bot.send_message(message.chat.id, "❌ Custom order canceled.")
-        return
-
-    try:
-        qty = int(text)
-    except ValueError:
-        bot.send_message(message.chat.id, "❌ Please enter a valid whole number (e.g. `1500`).")
-        return
-
-    if qty < srv["min"] or qty > srv["max"]:
-        bot.send_message(message.chat.id, f"❌ Quantity out of range! Minimum is {srv['min']:,} and maximum is {srv['max']:,}.")
-        return
-
-    calculated_cost = round((qty / 1000.0) * srv["rate"], 2)
-    if calculated_cost < 0.50:
-        calculated_cost = 0.50
-
-    fresh_user = get_user(user_id)
-    if not fresh_user or fresh_user["balance"] < calculated_cost:
-        cur_b = fresh_user["balance"] if fresh_user else 0.0
-        bot.send_message(
-            message.chat.id,
-            f"❌ **Insufficient Balance!**\n"
-            f"Required: ₹{calculated_cost:.2f} | Balance: ₹{cur_b:.2f}\n\n"
-            f"Please add funds to place this order.",
-            parse_mode="Markdown",
-            reply_markup=telebot.types.InlineKeyboardMarkup().add(
-                telebot.types.InlineKeyboardButton("💳 Add Balance Now", callback_data="add_balance"),
-                telebot.types.InlineKeyboardButton("🔙 Back to SMM Menu", callback_data="smm_main_menu")
-            )
-        )
-        return
-
-    waiting_for_smm_link[user_id] = {
-        "service_id": srv_id,
-        "quantity": qty,
-        "cost": calculated_cost,
-        "name": srv["name"]
-    }
-
-    markup = telebot.types.InlineKeyboardMarkup().add(
-        telebot.types.InlineKeyboardButton("🔙 Cancel & Back", callback_data="smm_main_menu")
-    )
-    bot.send_message(
-        message.chat.id,
-        f"🛒 **Confirm Custom Order: {srv['name']}**\n\n"
-        f"📦 **Quantity:** {qty:,}\n"
-        f"💰 **Total Cost:** ₹{calculated_cost:.2f}\n\n"
-        f"👇 **Reply with your {srv['link_type']}:**\n"
-        f"*(Make sure your account/channel is set to PUBLIC)*",
-        parse_mode="Markdown",
-        reply_markup=markup
-    )
-
-# --- SMM LINK RECEIVER ---
-@bot.message_handler(func=lambda m: m.from_user.id in waiting_for_smm_link)
-def handle_smm_submission(message):
-    user_id = message.from_user.id
-    details = waiting_for_smm_link.pop(user_id, None)
-    if not details:
-        return
-
-    link = message.text.strip()
-    if link.startswith("/"):
-        bot.send_message(message.chat.id, "❌ SMM Boost canceled.")
-        return
-
-    cost = details["cost"]
-    srv_id = details["service_id"]
-    qty = details["quantity"]
-    name = details["name"]
-
-    fresh = get_user(user_id)
-    if not fresh or fresh["balance"] < cost:
-        bot.send_message(message.chat.id, "❌ Insufficient balance.")
-        return
-
-    atomic_update_balance(user_id, -cost, spend_add=cost, order_add=1)
-    load = bot.send_message(message.chat.id, f"⏳ Submitting order for {qty:,} {name}...")
-
-    res = smm_place_order(srv_id, link, qty)
-    try:
-        bot.delete_message(message.chat.id, load.message_id)
-    except Exception:
-        pass
-
-    markup = telebot.types.InlineKeyboardMarkup().add(telebot.types.InlineKeyboardButton("🔙 Back to SMM", callback_data="smm_main_menu"))
-    if "order" in res:
-        smm_id = res["order"]
-        log_bot_transaction(user_id, "SMM_ORDER", cost, f"SMM Order #{smm_id} ({qty:,} {name})")
-        bot.send_message(
-            message.chat.id,
-            f"🎉 **BOOST ORDER PLACED!**\n\n🆔 **Order ID:** `{smm_id}`\n📌 **Service:** {name}\n📦 **Quantity:** {qty:,}\n🔗 **Link:** `{link}`\n💰 **Cost:** ₹{cost:.2f}",
-            parse_mode="Markdown", reply_markup=markup
-        )
-    else:
-        atomic_update_balance(user_id, cost, spend_add=-cost, order_add=-1)
-        err = res.get("error", str(res))
-        bot.send_message(message.chat.id, f"❌ Order failed, balance refunded. Reason: `{err}`", reply_markup=markup)
-
-# --- FAMPAY UPI TOPUP ---
+# ==============================================================================
+# FAMPAY UPI DEPOSIT SYSTEM (QR + AUTO-POLL)
+# ==============================================================================
 def create_topup_order(message_obj, user_id, amount_inr):
     headers = {"Authorization": f"Bearer {FAMPAY_API_KEY}", "Content-Type": "application/json"}
     payload = {"amount": amount_inr * 100, "redirect_url": "https://t.me/"}
@@ -1664,12 +903,12 @@ def create_topup_order(message_obj, user_id, amount_inr):
             markup.add(telebot.types.InlineKeyboardButton("❌ Cancel Order", callback_data="cancel_topup"))
             sent = bot.send_photo(
                 chat_id, qr_url,
-                caption=f"💳 **Order:** ₹{amount_inr}\n🆔 ID: `{order_id}`\n\n🔗 [Pay via UPI]({pay_link})\n⏱️ Valid for 5 minutes.",
+                caption=f"💳 **Deposit Request:** ₹{amount_inr}\n🆔 Order ID: `{order_id}`\n\n🔗 [Tap Here to Pay via UPI]({pay_link})\n⏱️ QR code expires in 5 minutes.",
                 parse_mode="Markdown", reply_markup=markup
             )
             user_orders[user_id] = {"order_id": order_id}
 
-            def poll(uid, oid, amt, mid):
+            def poll_payment(uid, oid, amt, mid):
                 for _ in range(150):
                     time.sleep(2)
                     if uid not in user_orders or user_orders[uid]["order_id"] != oid:
@@ -1686,15 +925,18 @@ def create_topup_order(message_obj, user_id, amount_inr):
                                 pass
                             up = get_user(uid)
                             cur_b = up['balance'] if up else amt
-                            bot.send_message(chat_id, f"🎉 **Payment of ₹{amt} credited!** Current Balance: ₹{cur_b:.2f}")
+                            bot.send_message(chat_id, f"🎉 **Payment Verified!**\n₹{amt:.2f} credited to your wallet.\n💳 New Balance: ₹{cur_b:.2f}")
                             break
                     except Exception:
                         pass
-            threading.Thread(target=poll, args=(user_id, order_id, amount_inr, sent.message_id), daemon=True).start()
+
+            threading.Thread(target=poll_payment, args=(user_id, order_id, amount_inr, sent.message_id), daemon=True).start()
     except Exception as e:
         bot.send_message(chat_id, f"Gateway Error: {str(e)}")
 
-# --- USER INPUT HANDLERS ---
+# ==============================================================================
+# USER TEXT INPUT HANDLERS
+# ==============================================================================
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_custom_topup)
 def handle_topup_input(message):
     uid = message.from_user.id
@@ -1702,11 +944,11 @@ def handle_topup_input(message):
     try:
         amt = int(message.text.strip())
         if amt < 10:
-            bot.send_message(message.chat.id, "Minimum ₹10 required.")
+            bot.send_message(message.chat.id, "❌ Minimum deposit amount is ₹10.")
             return
         create_topup_order(message, uid, amt)
     except Exception:
-        bot.send_message(message.chat.id, "Enter a valid number.")
+        bot.send_message(message.chat.id, "❌ Please enter a valid number.")
 
 @bot.message_handler(func=lambda m: m.from_user.id in waiting_for_support_ticket)
 def handle_ticket_input(message):
@@ -1714,6 +956,7 @@ def handle_ticket_input(message):
     cat = waiting_for_support_ticket.pop(uid, "General")
     msg = message.text.strip()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     conn = get_db_connection()
     if conn:
         try:
@@ -1724,9 +967,9 @@ def handle_ticket_input(message):
         finally:
             release_db_connection(conn)
 
-    bot.send_message(message.chat.id, "✅ Ticket submitted. We will inspect it shortly.")
+    bot.send_message(message.chat.id, "✅ Ticket submitted successfully! Our support staff will review it shortly.")
     try:
-        bot.send_message(ADMIN_ID, f"🚨 Ticket from `{uid}` [{cat}]:\n{msg}")
+        bot.send_message(ADMIN_ID, f"🚨 New Support Ticket from `{uid}` [{cat}]:\n{msg}")
     except Exception:
         pass
 
@@ -1744,7 +987,7 @@ def handle_coupon_input(message):
         cur.execute('SELECT * FROM coupons WHERE code = %s', (code,))
         c = cur.fetchone()
         if not c or (c["expires_at"] and datetime.now() > datetime.strptime(c["expires_at"], "%Y-%m-%d %H:%M:%S")) or c["uses_count"] >= c["max_uses"]:
-            bot.send_message(message.chat.id, "❌ Invalid or expired code.")
+            bot.send_message(message.chat.id, "❌ Invalid or expired coupon code.")
             cur.close()
             return
 
@@ -1758,390 +1001,23 @@ def handle_coupon_input(message):
         val = float(c["value"])
         if c["reward_type"] == "balance":
             atomic_update_balance(uid, val)
-            bot.send_message(message.chat.id, f"🎉 Code redeemed! ₹{val:.2f} credited.")
+            bot.send_message(message.chat.id, f"🎉 Coupon applied! ₹{val:.2f} credited to your wallet.")
         elif c["reward_type"] == "spin":
             cur.execute('UPDATE users SET bonus_spins = bonus_spins + %s WHERE user_id = %s', (int(val), uid))
-            bot.send_message(message.chat.id, f"🎉 Code redeemed! {int(val)} bonus spins added.")
+            bot.send_message(message.chat.id, f"🎉 Coupon applied! {int(val)} bonus spins added.")
 
         cur.execute('UPDATE coupons SET uses_count = uses_count + 1 WHERE code = %s', (code,))
         cur.execute('INSERT INTO coupon_redemptions (user_id, code, used_count) VALUES (%s, %s, 1) ON CONFLICT (user_id, code) DO UPDATE SET used_count = coupon_redemptions.used_count + 1', (uid, code))
         conn.commit()
         cur.close()
     except Exception as e:
-        bot.send_message(message.chat.id, f"Coupon error: {e}")
+        bot.send_message(message.chat.id, f"Coupon redemption error: {e}")
     finally:
         release_db_connection(conn)
 
-@bot.message_handler(func=lambda m: m.from_user.id in waiting_for_ai_prompt)
-def handle_ai_input(message):
-    uid = message.from_user.id
-    query = message.text.strip()
-
-    if query.startswith("/"):
-        waiting_for_ai_prompt.pop(uid, None)
-        bot.send_message(message.chat.id, "👋 Exited Store AI assistant mode.")
-        show_main_menu(message.chat.id, uid)
-        return
-
-    bot.send_chat_action(message.chat.id, 'typing')
-    ans = None
-
-    if GEMINI_API_KEY:
-        try:
-            r = requests.post(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
-                headers={"Content-Type": "application/json", "X-goog-api-key": GEMINI_API_KEY.strip()},
-                json={"contents": [{"parts": [{"text": f"{AI_INSTRUCTION}\n\nCustomer: {query}\nAnswer:"}]}]},
-                timeout=12
-            )
-            cands = r.json().get("candidates", [])
-            if cands:
-                ans = cands[0]["content"]["parts"][0]["text"]
-        except Exception:
-            pass
-
-    if not ans and OPENROUTER_API_KEY:
-        try:
-            r = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}", "Content-Type": "application/json"},
-                json={"model": "meta-llama/llama-3.1-8b-instruct:free", "messages": [{"role": "system", "content": AI_INSTRUCTION}, {"role": "user", "content": query}]},
-                timeout=12
-            )
-            ans = r.json()["choices"][0]["message"]["content"]
-        except Exception:
-            pass
-
-    reply_markup = telebot.types.InlineKeyboardMarkup().add(
-        telebot.types.InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")
-    )
-    final_text = ans or "Store AI is momentarily busy. Please ask again in a moment!"
-    bot.send_message(message.chat.id, final_text, reply_markup=reply_markup)
-
-@bot.message_handler(func=lambda m: m.from_user.id in waiting_for_dl_link)
-def handle_video_download_flow(message):
-    uid = message.from_user.id
-    waiting_for_dl_link.pop(uid, None)
-    raw_url = message.text.strip()
-
-    if raw_url.startswith("/"):
-        bot.send_message(message.chat.id, "❌ Video download canceled.")
-        return
-
-    if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
-        bot.send_message(message.chat.id, "❌ Please send a valid link starting with `https://`.")
-        return
-
-    status_msg = bot.send_message(message.chat.id, "⏳ Fetching video stream... Please wait a moment.")
-    bot.send_chat_action(message.chat.id, 'upload_video')
-
-    markup = telebot.types.InlineKeyboardMarkup().add(
-        telebot.types.InlineKeyboardButton("📥 Download Another", callback_data="open_downloader"),
-        telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
-    )
-
-    if "instagram.com" in raw_url:
-        direct_url = fetch_instagram_direct_mp4(raw_url)
-        if direct_url:
-            try:
-                vid_res = requests.get(direct_url, timeout=35, stream=True)
-                if vid_res.status_code == 200:
-                    try:
-                        bot.delete_message(message.chat.id, status_msg.message_id)
-                    except Exception:
-                        pass
-                    bot.send_video(
-                        message.chat.id,
-                        vid_res.content,
-                        caption="🎬 **Instagram Reel**\n⚡ Downloaded Free via CandidStore",
-                        parse_mode="Markdown",
-                        reply_markup=markup
-                    )
-                    return
-            except Exception:
-                pass
-        
-        try:
-            bot.delete_message(message.chat.id, status_msg.message_id)
-        except Exception:
-            pass
-        bot.send_message(
-            message.chat.id,
-            "⚠️ Unable to download this Reel. Make sure the Instagram account is public and not age-restricted.",
-            reply_markup=markup
-        )
-        return
-
-    if not YTDLP_ENABLED or yt_dlp is None:
-        bot.send_message(message.chat.id, "⚠️ Downloader engine is updating. Try again in 2 minutes.")
-        return
-
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            out_template = os.path.join(tmpdir, "%(id)s.%(ext)s")
-            ydl_opts = {
-                'outtmpl': out_template,
-                'format': 'best[ext=mp4][filesize<48M]/best[filesize<48M]/best',
-                'quiet': True,
-                'no_warnings': True,
-                'noplaylist': True,
-                'retries': 3,
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android', 'ios'],
-                    }
-                },
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'
-                }
-            }
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(raw_url, download=True)
-                downloaded_file = ydl.prepare_filename(info)
-
-            try:
-                bot.delete_message(message.chat.id, status_msg.message_id)
-            except Exception:
-                pass
-
-            if os.path.exists(downloaded_file):
-                f_size = os.path.getsize(downloaded_file) / (1024 * 1024)
-                if f_size > 49.5:
-                    bot.send_message(message.chat.id, f"⚠️ Video size ({f_size:.1f}MB) exceeds Telegram's 50MB limit.")
-                    return
-
-                title = info.get('title', 'Downloaded Video')[:70]
-                with open(downloaded_file, 'rb') as vf:
-                    bot.send_video(
-                        message.chat.id,
-                        vf,
-                        caption=f"🎬 **{title}**\n⚡ Downloaded Free via CandidStore",
-                        parse_mode="Markdown",
-                        reply_markup=markup
-                    )
-            else:
-                bot.send_message(message.chat.id, "⚠️ Could not extract downloadable media from this URL.")
-
-    except Exception as e:
-        try:
-            bot.delete_message(message.chat.id, status_msg.message_id)
-        except Exception:
-            pass
-        bot.send_message(message.chat.id, f"⚠️ Download failed: ({str(e)[:85]})")
-
-# --- AI IMAGE GENERATION (POLLINATIONS FLUX) ---
-@bot.message_handler(func=lambda m: m.from_user.id in waiting_for_image_prompt)
-def handle_ai_image_prompt(message):
-    uid = message.from_user.id
-    waiting_for_image_prompt.pop(uid, None)
-    prompt = message.text.strip()
-
-    if prompt.startswith("/"):
-        bot.send_message(message.chat.id, "❌ Image generation canceled.")
-        return
-
-    fresh_user = get_user(uid)
-    if not fresh_user or fresh_user["balance"] < IMAGE_FEE:
-        cur_b = fresh_user["balance"] if fresh_user else 0.0
-        bot.send_message(
-            message.chat.id,
-            f"❌ **Insufficient Balance!**\nImage generation costs: ₹{IMAGE_FEE:.2f}\nYour balance: ₹{cur_b:.2f}",
-            parse_mode="Markdown",
-            reply_markup=telebot.types.InlineKeyboardMarkup().add(
-                telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
-                telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
-            )
-        )
-        return
-
-    atomic_update_balance(uid, -IMAGE_FEE, spend_add=IMAGE_FEE, order_add=1)
-    status_msg = bot.send_message(message.chat.id, f"🎨 Generating your artwork (₹{IMAGE_FEE:.2f} deducted)...")
-    bot.send_chat_action(message.chat.id, 'upload_photo')
-
-    try:
-        encoded_prompt = urllib.parse.quote(prompt)
-        api_key_clean = (POLLINATIONS_API_KEY or "").strip()
-        if api_key_clean.startswith("Sk_"):
-            api_key_clean = "sk_" + api_key_clean[3:]
-
-        image_url = f"https://gen.pollinations.ai/image/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true&key={api_key_clean}"
-        resp = requests.get(image_url, timeout=45)
-
-        if resp.status_code in [401, 402]:
-            fallback_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
-            resp = requests.get(fallback_url, timeout=45)
-
-        try:
-            bot.delete_message(message.chat.id, status_msg.message_id)
-        except Exception:
-            pass
-
-        if resp.status_code == 200:
-            log_bot_transaction(uid, "AI_IMAGE", IMAGE_FEE, f"Generated: {prompt[:40]}")
-            u_upd = get_user(uid)
-            rem_bal = u_upd['balance'] if u_upd else 0.0
-            markup = telebot.types.InlineKeyboardMarkup().add(
-                telebot.types.InlineKeyboardButton("🎨 Create Another (₹2)", callback_data="open_image_gen"),
-                telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
-            )
-            bot.send_photo(
-                message.chat.id,
-                resp.content,
-                caption=f"✨ **Prompt:** `{prompt[:150]}`\n💰 Charged: ₹{IMAGE_FEE:.2f} | 💳 Balance: ₹{rem_bal:.2f}",
-                parse_mode="Markdown",
-                reply_markup=markup
-            )
-        else:
-            atomic_update_balance(uid, IMAGE_FEE, spend_add=-IMAGE_FEE, order_add=-1)
-            log_bot_transaction(uid, "REFUND", IMAGE_FEE, f"Failed image status {resp.status_code}")
-            bot.send_message(message.chat.id, f"⚠️ Server returned error ({resp.status_code}). Balance refunded.")
-
-    except Exception as e:
-        try:
-            bot.delete_message(message.chat.id, status_msg.message_id)
-        except Exception:
-            pass
-        atomic_update_balance(uid, IMAGE_FEE, spend_add=-IMAGE_FEE, order_add=-1)
-        log_bot_transaction(uid, "REFUND", IMAGE_FEE, "Image timeout refund")
-        bot.send_message(message.chat.id, f"⚠️ Connection timed out. Balance refunded. Error: {e}")
-
-# --- AI BACKGROUND REMOVER (REMBG) ---
-@bot.message_handler(content_types=['photo', 'document'], func=lambda m: m.from_user.id in waiting_for_rembg_photo)
-def handle_rembg_photo(message):
-    uid = message.from_user.id
-    waiting_for_rembg_photo.pop(uid, None)
-
-    if not REMBG_ENABLED or remove is None:
-        bot.send_message(message.chat.id, "⚠️ Background remover service is currently initializing or updating.")
-        return
-
-    fresh_user = get_user(uid)
-    if not fresh_user or fresh_user["balance"] < REMBG_FEE:
-        cur_b = fresh_user["balance"] if fresh_user else 0.0
-        bot.send_message(
-            message.chat.id,
-            f"❌ **Insufficient Balance!**\nBackground removal costs: ₹{REMBG_FEE:.2f}\nBalance: ₹{cur_b:.2f}",
-            parse_mode="Markdown",
-            reply_markup=telebot.types.InlineKeyboardMarkup().add(
-                telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
-                telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
-            )
-        )
-        return
-
-    atomic_update_balance(uid, -REMBG_FEE, spend_add=REMBG_FEE, order_add=1)
-    status_msg = bot.send_message(message.chat.id, f"✂️ Processing cutout (₹{REMBG_FEE:.2f} deducted)...")
-    bot.send_chat_action(message.chat.id, 'upload_document')
-
-    try:
-        file_id = message.photo[-1].file_id if message.content_type == 'photo' else message.document.file_id
-        file_info = bot.get_file(file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-
-        output_data = remove(downloaded_file)
-        output_stream = io.BytesIO(output_data)
-        output_stream.name = f"cutout_{uid}.png"
-
-        try:
-            bot.delete_message(message.chat.id, status_msg.message_id)
-        except Exception:
-            pass
-
-        log_bot_transaction(uid, "BG_REMOVE", REMBG_FEE, "Background removal cutout")
-        u_upd = get_user(uid)
-        rem_bal = u_upd['balance'] if u_upd else 0.0
-
-        markup = telebot.types.InlineKeyboardMarkup().add(
-            telebot.types.InlineKeyboardButton("✂️ Cutout Another (₹1)", callback_data="open_rembg"),
-            telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
-        )
-        bot.send_document(
-            message.chat.id,
-            output_stream,
-            caption=f"✅ **Background Removed Successfully!**\n💰 Charged: ₹{REMBG_FEE:.2f} | 💳 Balance: ₹{rem_bal:.2f}",
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
-    except Exception as e:
-        try:
-            bot.delete_message(message.chat.id, status_msg.message_id)
-        except Exception:
-            pass
-        atomic_update_balance(uid, REMBG_FEE, spend_add=-REMBG_FEE, order_add=-1)
-        log_bot_transaction(uid, "REFUND", REMBG_FEE, "BG Remove error refund")
-        bot.send_message(message.chat.id, f"⚠️ Failed to process image. Balance refunded. Error: {e}")
-
-# --- AI IMAGE ENHANCER & UPSCALER ---
-@bot.message_handler(content_types=['photo', 'document'], func=lambda m: m.from_user.id in waiting_for_enhance_photo)
-def handle_enhance_photo(message):
-    uid = message.from_user.id
-    waiting_for_enhance_photo.pop(uid, None)
-
-    fresh_user = get_user(uid)
-    if not fresh_user or fresh_user["balance"] < ENHANCE_FEE:
-        cur_b = fresh_user["balance"] if fresh_user else 0.0
-        bot.send_message(
-            message.chat.id,
-            f"❌ **Insufficient Balance!**\nEnhance cost: ₹{ENHANCE_FEE:.2f} | Balance: ₹{cur_b:.2f}",
-            reply_markup=telebot.types.InlineKeyboardMarkup().add(
-                telebot.types.InlineKeyboardButton("💳 Add Balance", callback_data="add_balance"),
-                telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
-            )
-        )
-        return
-
-    atomic_update_balance(uid, -ENHANCE_FEE, spend_add=ENHANCE_FEE, order_add=1)
-    status_msg = bot.send_message(message.chat.id, "✨ Enhancing clarity, color, and resolution...")
-    bot.send_chat_action(message.chat.id, 'upload_photo')
-
-    try:
-        file_id = message.photo[-1].file_id if message.content_type == 'photo' else message.document.file_id
-        file_info = bot.get_file(file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-
-        image = Image.open(io.BytesIO(downloaded_file)).convert("RGB")
-        w, h = image.size
-
-        image = image.resize((w * 2, h * 2), Image.Resampling.LANCZOS)
-        image = ImageEnhance.Contrast(image).enhance(1.15)
-        image = ImageEnhance.Color(image).enhance(1.10)
-        image = ImageEnhance.Sharpness(image).enhance(1.60)
-        image = image.filter(ImageFilter.UnsharpMask(radius=2, percent=140, threshold=3))
-
-        output_stream = io.BytesIO()
-        image.save(output_stream, format='JPEG', quality=95)
-        output_stream.seek(0)
-
-        try:
-            bot.delete_message(message.chat.id, status_msg.message_id)
-        except Exception:
-            pass
-
-        log_bot_transaction(uid, "IMAGE_ENHANCE", ENHANCE_FEE, "Image quality enhancement")
-        u_upd = get_user(uid)
-        rem_bal = u_upd['balance'] if u_upd else 0.0
-        markup = telebot.types.InlineKeyboardMarkup().add(
-            telebot.types.InlineKeyboardButton("✨ Enhance Another (₹1)", callback_data="open_enhance"),
-            telebot.types.InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
-        )
-        bot.send_photo(
-            message.chat.id,
-            output_stream,
-            caption=f"✨ **Image Enhanced Successfully!**\n💰 Cost: ₹{ENHANCE_FEE:.2f} | 💳 Balance: ₹{rem_bal:.2f}",
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
-    except Exception as e:
-        try:
-            bot.delete_message(message.chat.id, status_msg.message_id)
-        except Exception:
-            pass
-        atomic_update_balance(uid, ENHANCE_FEE, spend_add=-ENHANCE_FEE, order_add=-1)
-        log_bot_transaction(uid, "REFUND", ENHANCE_FEE, "Enhance error refund")
-        bot.send_message(message.chat.id, f"⚠️ Enhancement failed, balance refunded: {e}")
-
-# --- ADMIN COUPON BUILDER ---
+# ==============================================================================
+# ADMIN FLOW HANDLERS
+# ==============================================================================
 @bot.message_handler(func=lambda message: message.from_user.id in admin_coupon_flow and message.from_user.id == ADMIN_ID)
 def admin_coupon_builder(message):
     admin_id = message.from_user.id
@@ -2160,7 +1036,7 @@ def admin_coupon_builder(message):
         try:
             flow["value"] = float(text)
             flow["step"] = "max_users"
-            bot.send_message(message.chat.id, "👥 Enter max allowed global uses (e.g. `5`):")
+            bot.send_message(message.chat.id, "👥 Enter maximum total global redemptions (e.g. `10`):")
         except ValueError:
             bot.send_message(message.chat.id, "❌ Send a valid numeric value.")
 
@@ -2168,7 +1044,7 @@ def admin_coupon_builder(message):
         try:
             flow["max_users"] = int(text)
             flow["step"] = "hours"
-            bot.send_message(message.chat.id, "⏳ Enter expiry validity in hours (e.g. `24`):")
+            bot.send_message(message.chat.id, "⏳ Enter validity duration in hours (e.g. `48`):")
         except ValueError:
             bot.send_message(message.chat.id, "❌ Send a valid integer.")
 
@@ -2196,11 +1072,10 @@ def admin_coupon_builder(message):
                 finally:
                     release_db_connection(conn)
 
-            bot.send_message(message.chat.id, f"✅ **Coupon `{code}` Created!**\nReward: {r_type} ({val})\nUses: {max_uses}\nExpires: {expires_at}", parse_mode="Markdown")
+            bot.send_message(message.chat.id, f"✅ **Coupon `{code}` Created!**\nReward: {r_type} ({val})\nMax Uses: {max_uses}\nExpires: {expires_at}", parse_mode="Markdown")
         except Exception as e:
             bot.send_message(message.chat.id, f"❌ Error: {e}")
 
-# --- ADMIN ACTIONS ---
 @bot.message_handler(func=lambda m: m.from_user.id in admin_actions and m.from_user.id == ADMIN_ID)
 def handle_admin_action(message):
     admin_id = message.from_user.id
@@ -2223,11 +1098,11 @@ def handle_admin_action(message):
         sent, fail = 0, 0
         for u in users:
             try:
-                bot.send_message(u[0], f"📢 **ANNOUNCEMENT**\n\n{text}", parse_mode="Markdown")
+                bot.send_message(u[0], f"📢 **OFFICIAL ANNOUNCEMENT**\n\n{text}", parse_mode="Markdown")
                 sent += 1
             except Exception:
                 fail += 1
-        bot.send_message(message.chat.id, f"Broadcast complete. Sent: {sent} | Failed: {fail}")
+        bot.send_message(message.chat.id, f"✅ Broadcast finished. Sent: {sent} | Failed: {fail}")
 
     elif action in ["addbal", "cutbal"]:
         try:
@@ -2237,7 +1112,7 @@ def handle_admin_action(message):
             log_bot_transaction(target_id, "ADMIN_MOD", change, "Admin manual balance adjustment")
             bot.send_message(message.chat.id, f"Balance adjusted by {change} for `{target_id}`.")
         except Exception:
-            bot.send_message(message.chat.id, "Format error: `USER_ID AMOUNT`")
+            bot.send_message(message.chat.id, "Format: `USER_ID AMOUNT`")
 
     elif action == "checkuser":
         try:
@@ -2278,37 +1153,18 @@ def handle_admin_action(message):
         except Exception:
             bot.send_message(message.chat.id, "❌ Invalid user ID.")
 
-    elif action == "reseller":
-        try:
-            target_id = int(text)
-            target = get_user(target_id)
-            if target:
-                new_role = "Customer" if target["role"] == "Reseller" else "Reseller"
-                conn = get_db_connection()
-                if conn:
-                    try:
-                        cur = conn.cursor()
-                        cur.execute('UPDATE users SET role = %s WHERE user_id = %s', (new_role, target_id))
-                        conn.commit()
-                        cur.close()
-                    finally:
-                        release_db_connection(conn)
-                bot.send_message(message.chat.id, f"✅ User `{target_id}` role set to **{new_role}**.", parse_mode="Markdown")
-            else:
-                bot.send_message(message.chat.id, "❌ User not found.")
-        except Exception:
-            bot.send_message(message.chat.id, "❌ Invalid user ID.")
-
-# --- SAFE STARTUP SEQUENCE ---
+# ==============================================================================
+# BOT RUNNER WITH AUTOMATIC RESTART
+# ==============================================================================
 if __name__ == "__main__":
     print("Initiating safe Telegram connection...")
     try:
         bot.delete_webhook(drop_pending_updates=True)
         print("Webhook cleared successfully.")
     except Exception as e:
-        print(f"Webhook clearance notice: {e}")
+        print(f"Webhook notice: {e}")
 
-    print("Bot is up and running.")
+    print("AI Subscription Bot is running...")
     while True:
         try:
             bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
