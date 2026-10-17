@@ -1,9 +1,12 @@
 import asyncio
 import logging
+import os
 import random
+import sys
 import aiohttp
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import CommandStart
+from aiogram.enums import ChatAction
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -14,26 +17,36 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-# ---------------- CONFIGURATION ----------------
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+# ----------------- CONFIGURATION -----------------
+# Paste your Bot Token here, OR set it in your host's Environment Variables as BOT_TOKEN
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 
-logging.basicConfig(level=logging.INFO)
+if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+    print("❌ ERROR: Please define your BOT_TOKEN inside main.py or your environment variables!")
+    sys.exit(1)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# In-memory storage for user settings and history
+# In-memory storage for user settings & history
 user_settings = {}
 user_history = {}
 
 
-# ---------------- FSM STATES ----------------
-class Form(StatesGroup):
+# ----------------- FSM STATES -----------------
+class GenerateState(StatesGroup):
     waiting_for_prompt = State()
 
 
-# ---------------- KEYBOARDS ----------------
-def get_main_keyboard() -> ReplyKeyboardMarkup:
-    """Builds the 7-row reply keyboard seen in the reference interface."""
+# ----------------- KEYBOARDS -----------------
+def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Matches the exact grid layout from the reference bot."""
     kb = [
         [KeyboardButton(text="🎨 Generate")],
         [
@@ -58,53 +71,35 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
-def get_settings_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    current_res = user_settings.get(user_id, {}).get("resolution", "768x768")
-    kb = [
-        [
-            InlineKeyboardButton(
-                text=f"{'✅ ' if current_res == '512x512' else ''}512x512",
-                callback_data="set_res:512x512",
-            ),
-            InlineKeyboardButton(
-                text=f"{'✅ ' if current_res == '768x768' else ''}768x768",
-                callback_data="set_res:768x768",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text=f"{'✅ ' if current_res == '512x768' else ''}512x768 (Portrait)",
-                callback_data="set_res:512x768",
-            ),
-            InlineKeyboardButton(
-                text=f"{'✅ ' if current_res == '768x512' else ''}768x512 (Landscape)",
-                callback_data="set_res:768x512",
-            ),
-        ],
+def get_resolution_inline_keyboard(current_res: str) -> InlineKeyboardMarkup:
+    resolutions = [
+        ("512x512 (Square)", "512x512"),
+        ("768x768 (HD Square)", "768x768"),
+        ("512x768 (Portrait)", "512x768"),
+        ("768x512 (Landscape)", "768x512"),
     ]
-    return InlineKeyboardMarkup(inline_keyboard=kb)
+    buttons = []
+    for label, val in resolutions:
+        prefix = "✅ " if val == current_res else ""
+        buttons.append([InlineKeyboardButton(text=f"{prefix}{label}", callback_data=f"set_res:{val}")])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# ---------------- PERCHANCE API CLIENT ----------------
-async def fetch_perchance_image(
-    prompt: str,
-    resolution: str = "768x768",
-    guidance_scale: int = 7,
-    negative_prompt: str = "",
-) -> str | None:
-    """Sends a generation request directly to Perchance API returning a permanent hosted URL."""
-    api_url = "https://perchance.org/perchance-ai-api"
-    
+# ----------------- PERCHANCE API -----------------
+async def request_perchance_image(prompt: str, resolution: str = "768x768") -> str | None:
+    """
+    Calls Perchance Image API directly using JSON format.
+    Returns the permanent hosted URL on user.uploads.dev.
+    """
+    url = "https://perchance.org/perchance-ai-api"
     params = {
         "prompt": prompt,
         "format": "json",
         "resolution": resolution,
-        "guidanceScale": guidance_scale,
-        "seed": random.randint(1, 99999999),
+        "guidanceScale": "7",
+        "seed": str(random.randint(1000, 99999999)),
     }
-
-    if negative_prompt:
-        params["negativePrompt"] = negative_prompt
 
     headers = {
         "User-Agent": (
@@ -113,195 +108,206 @@ async def fetch_perchance_image(
             "Chrome/124.0.0.0 Safari/537.36"
         ),
         "Referer": "https://perchance.org/",
+        "Accept": "application/json, text/plain, */*",
     }
 
+    timeout = aiohttp.ClientTimeout(total=180)
+
     try:
-        # Generates image and returns hosted URL on user.uploads.dev
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                api_url, params=params, headers=headers, timeout=120
-            ) as response:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, params=params, headers=headers) as response:
                 if response.status == 200:
                     data = await response.json(content_type=None)
-                    if data.get("ok") and data.get("url"):
+                    if isinstance(data, dict) and data.get("ok"):
                         return data.get("url")
+                    else:
+                        logger.warning(f"Perchance error response: {data}")
                 else:
-                    logging.error(f"Perchance API returned status: {response.status}")
-    except Exception as exc:
-        logging.error(f"Perchance request failed: {exc}")
+                    logger.error(f"Perchance returned HTTP status: {response.status}")
+    except asyncio.TimeoutError:
+        logger.error("Perchance generation request timed out after 180s.")
+    except Exception as e:
+        logger.error(f"Failed to fetch image from Perchance: {e}")
 
     return None
 
 
-# ---------------- COMMAND & EVENT HANDLERS ----------------
+# ----------------- HANDLERS -----------------
 @dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    user_name = message.from_user.first_name or "Friend"
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
     user_id = message.from_user.id
+    name = message.from_user.first_name or "Friend"
 
     if user_id not in user_settings:
         user_settings[user_id] = {"resolution": "768x768"}
 
-    welcome_text = (
-        f"👋 Welcome back, **{user_name}**! 🔥\n\n"
-        "Turn any idea into a work of art created with the help of AI — "
-        "in a matter of minutes. No restrictions.\n\n"
+    welcome = (
+        f"👋 Welcome back, **{name}**! 🔥\n\n"
+        "Turn any prompt into a high-quality work of art created with the help of AI "
+        "— in a matter of minutes. No restrictions.\n\n"
         "🔥 Realistic photo and artwork generation\n"
-        "🔥 Unlimited — no usage caps\n"
-        "🔥 Fast cloud delivery\n\n"
+        "🔥 Editing & prompt styling\n"
+        "🔥 Free unlimited generation (via Perchance)\n\n"
         "Get started for free. Top up your account with Telegram Stars.\n"
         "Only for persons over 18 years old."
     )
-    await message.answer(
-        welcome_text,
-        reply_markup=get_main_keyboard(),
-        parse_mode="Markdown",
-    )
+    await message.answer(welcome, reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
 
 
-# Trigger generation prompt input
 @dp.message(F.text == "🎨 Generate")
-async def start_generation(message: types.Message, state: FSMContext):
-    await state.set_state(Form.waiting_for_prompt)
+async def btn_generate(message: types.Message, state: FSMContext):
+    await state.set_state(GenerateState.waiting_for_prompt)
     await message.answer(
-        "✏️ Send me your prompt description (e.g., _a futuristic cyberpunk city at sunset, neon reflections, 8k resolution_):",
-        parse_mode="Markdown",
+        "✏️ **Please enter your image prompt:**\n\n"
+        "_Example: a cyberpunk street in rain, neon glowing signs, cinematic lighting, 8k_",
+        parse_mode="Markdown"
     )
 
 
-# Handle the prompt text sent by user
-@dp.message(Form.waiting_for_prompt, F.text)
-async def process_prompt(message: types.Message, state: FSMContext):
+@dp.message(GenerateState.waiting_for_prompt, F.text)
+async def process_generation(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     prompt = message.text.strip()
     resolution = user_settings.get(user_id, {}).get("resolution", "768x768")
 
     status_msg = await message.answer(
-        "⏳ **Generating your artwork with Perchance AI...**\n"
-        f"📐 Resolution: `{resolution}`",
-        parse_mode="Markdown",
+        f"⏳ **Generating your image...**\n"
+        f"📐 Resolution: `{resolution}`\n"
+        "Please wait a few moments...",
+        parse_mode="Markdown"
     )
 
-    image_url = await fetch_perchance_image(prompt=prompt, resolution=resolution)
+    # Show typing / sending photo action
+    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.UPLOAD_PHOTO)
+
+    image_url = await request_perchance_image(prompt, resolution=resolution)
 
     if image_url:
-        # Save to history list
         user_history.setdefault(user_id, []).append((prompt, image_url))
-
-        caption = f"🎨 **Prompt:** {prompt}\n📐 **Size:** {resolution}"
+        caption = f"🎨 **Prompt:** {prompt}\n📐 **Resolution:** {resolution}"
         await bot.send_photo(
             chat_id=message.chat.id,
             photo=image_url,
             caption=caption,
-            parse_mode="Markdown",
+            parse_mode="Markdown"
         )
-        await status_msg.delete()
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
     else:
         await status_msg.edit_text(
-            "⚠️ Generation timed out or failed. Please try a different prompt."
+            "⚠️ **Generation Failed or Timed Out**\n\n"
+            "Perchance service is busy right now. Please try again with a slightly different prompt.",
+            parse_mode="Markdown"
         )
 
     await state.clear()
 
 
-# Settings menu for aspect ratios
 @dp.message(F.text == "⚙️ Settings")
-async def settings_menu(message: types.Message):
+async def btn_settings(message: types.Message):
     user_id = message.from_user.id
+    current_res = user_settings.get(user_id, {}).get("resolution", "768x768")
     await message.answer(
-        "⚙️ **Generation Settings**\nSelect your desired output resolution:",
-        reply_markup=get_settings_keyboard(user_id),
-        parse_mode="Markdown",
+        "⚙️ **Image Resolution Settings:**\nSelect the dimensions for your images:",
+        reply_markup=get_resolution_inline_keyboard(current_res),
+        parse_mode="Markdown"
     )
 
 
 @dp.callback_query(F.data.startswith("set_res:"))
-async def change_resolution(callback: types.CallbackQuery):
+async def callback_set_resolution(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     new_res = callback.data.split(":")[1]
-
     user_settings.setdefault(user_id, {})["resolution"] = new_res
+
     await callback.message.edit_reply_markup(
-        reply_markup=get_settings_keyboard(user_id)
+        reply_markup=get_resolution_inline_keyboard(new_res)
     )
     await callback.answer(f"Resolution set to {new_res}")
 
 
-# Account balance handler
 @dp.message(F.text == "💰 Balance")
-async def check_balance(message: types.Message):
+async def btn_balance(message: types.Message):
     await message.answer(
-        "💰 **Account Balance:**\n\n"
-        "• Plan: **Unlimited Free (Perchance AI)**\n"
-        "• Daily Limit: **None (Free & Unlimited)**\n"
+        "💳 **Your Balance:**\n\n"
+        "• AI Model: **Perchance AI (Unlimited)**\n"
+        "• Generations Remaining: **∞ Unlimited Free**\n"
         "• Telegram Stars: **0 ⭐**\n\n"
-        "You can generate as many images as you like without restrictions.",
-        parse_mode="Markdown",
+        "You can generate images without limits.",
+        parse_mode="Markdown"
     )
 
 
-# Generation history handler
 @dp.message(F.text == "📜 History")
-async def show_history(message: types.Message):
+async def btn_history(message: types.Message):
     user_id = message.from_user.id
     history = user_history.get(user_id, [])
 
     if not history:
-        await message.answer("📜 You haven't generated any images yet.")
+        await message.answer("📜 You haven't generated any images yet in this session.")
         return
 
     text = "📜 **Your Recent Generations:**\n\n"
     for idx, (p, url) in enumerate(reversed(history[-5:]), 1):
-        text += f"{idx}. [{p[:40]}...]({url})\n"
+        clean_p = (p[:35] + "...") if len(p) > 35 else p
+        text += f"{idx}. [{clean_p}]({url})\n"
 
     await message.answer(text, parse_mode="Markdown", disable_web_page_preview=True)
 
 
-# Referral link handler
 @dp.message(F.text == "👥 Referrals")
-async def referral_link(message: types.Message):
+async def btn_referrals(message: types.Message):
     bot_info = await bot.get_me()
-    ref_url = f"https://t.me/{bot_info.username}?start=ref_{message.from_user.id}"
+    ref_link = f"https://t.me/{bot_info.username}?start=ref_{message.from_user.id}"
     await message.answer(
-        f"👥 **Your Referral Link:**\n`{ref_url}`\n\n"
-        "Share your referral link with friends to climb the leaderboard!",
-        parse_mode="Markdown",
+        f"👥 **Your Referral Link:**\n`{ref_link}`\n\n"
+        "Invite your friends to the bot and unlock bonus features!",
+        parse_mode="Markdown"
     )
 
 
-# Other menu buttons
 @dp.message(F.text == "ℹ️ Help")
-async def help_menu(message: types.Message):
+async def btn_help(message: types.Message):
     await message.answer(
-        "ℹ️ **How to use:**\n\n"
+        "ℹ️ **Help Guide:**\n\n"
         "1. Click **🎨 Generate**\n"
-        "2. Type any description of the image you want\n"
-        "3. Wait 10-30 seconds for your permanent generated image link\n"
-        "4. Adjust size preferences inside **⚙️ Settings**"
+        "2. Send your text prompt\n"
+        "3. Wait a few moments to receive your high-resolution image\n"
+        "4. Use **⚙️ Settings** to customize output dimensions",
+        parse_mode="Markdown"
     )
 
 
 @dp.message(
-    F.text.in_(
-        [
-            "🎁 Promo code",
-            "🌐 Language",
-            "📰 Updates",
-            "⭐ Create a personal bot",
-            "🤖 Claude + Gemini + OpenAI 🤖",
-        ]
-    )
+    F.text.in_([
+        "🎁 Promo code",
+        "🌐 Language",
+        "📰 Updates",
+        "⭐ Create a personal bot",
+        "🤖 Claude + Gemini + OpenAI 🤖"
+    ])
 )
-async def menu_fallbacks(message: types.Message):
-    await message.answer(f"ℹ️ **{message.text}** is active for your account.")
+async def btn_placeholders(message: types.Message):
+    await message.answer(
+        f"✨ **{message.text}**\nThis feature is active on your bot account.",
+        parse_mode="Markdown"
+    )
 
 
-# ---------------- RUNNER ----------------
+# ----------------- MAIN RUNNER -----------------
 async def main():
-    print("Bot is running...")
+    logger.info("Starting Telegram Bot...")
+    # Crucial: Clears old webhooks and dropped updates to prevent conflicts
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped.")
 
