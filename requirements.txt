@@ -1,7 +1,2 @@
-pyTelegramBotAPI
-requests
-psycopg2-binary
-Pillow
-rembg
-onnxruntime
-yt-dlp
+aiogram==3.15.0
+aiohttp==3.10.10
